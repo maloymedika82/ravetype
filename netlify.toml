@@ -1,0 +1,9 @@
+[build]
+  base = "kino-vdvoem-netlify"
+  publish = "public"
+  functions = "netlify/functions"
+
+[[redirects]]
+  from = "/r/*"
+  to = "/index.html"
+  status = 200
