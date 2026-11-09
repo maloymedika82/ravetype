@@ -7,6 +7,6 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@netlify/blobs": "^11.1.7"
+    "@netlify/blobs": "11.1.7"
   }
 }
