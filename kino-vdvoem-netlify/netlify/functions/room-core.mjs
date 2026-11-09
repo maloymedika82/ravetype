@@ -16,7 +16,7 @@ async function readBody(request) {
 
 function snapshot(state, now) {
   return {
-    room: state.room,
+    room: { ...state.room, owner_id: state.owner_id },
     participants: state.participants.filter(p => p.last_seen > now - 30000).map(({ client_id, name }) => ({ client_id, name })),
     messages: state.messages,
   };
@@ -27,6 +27,7 @@ function newState(id, now) {
     room: { id, media_url: '', playing: 0, position: 0, updated_at: now, revision: 0 },
     participants: [],
     messages: [],
+    owner_id: null,
   };
 }
 
@@ -62,12 +63,15 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
     for (let attempt = 0; attempt < 8; attempt++) {
       const entry = await store.getWithMetadata(id, { consistency: 'strong', type: 'json' });
       const state = entry?.data || newState(id, now);
+      const ownerAssigned = !state.owner_id;
+      if (ownerAssigned) state.owner_id = clientId;
       const participants = state.participants.filter(p => p.last_seen > now - 30000);
       const member = participants.find(p => p.client_id === clientId);
       if (!member && participants.length >= 2) return json({ error: 'В комнате уже два зрителя' }, 403);
+      if (action === 'media' && state.owner_id !== clientId) return json({ error: 'Источник может менять только владелец комнаты' }, 403);
 
       // Presence is refreshed every 10 seconds to keep polling inexpensive.
-      const needsWrite = action !== 'poll' || !member || member.name !== name || now - member.last_seen >= 10000 || participants.length !== state.participants.length;
+      const needsWrite = ownerAssigned || action !== 'poll' || !member || member.name !== name || now - member.last_seen >= 10000 || participants.length !== state.participants.length;
       if (!needsWrite) return json(snapshot(state, now));
       state.participants = participants;
       if (member) { member.name = name; member.last_seen = now; }
@@ -93,3 +97,4 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
     return json({ error: 'Ошибка сервера. Попробуйте ещё раз.' }, 500);
   }
 }
+
