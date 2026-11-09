@@ -34,7 +34,7 @@
     <div class="heading"><div><div class="eyebrow">ВАША КОМНАТА</div><h1>Время смотреть вместе 🍿</h1><p>Одна комната, два человека и кино на вечер.</p></div><span class="status">КОМНАТА АКТИВНА</span></div>
     <div class="grid"><div class="maincol">
       <section class="player-card" aria-label="Плеер"><div class="player-top"><div class="now"><span class="now-dot"></span> СЕЙЧАС СМОТРИМ</div><small id="playerStatus">Ожидаем фильм</small></div><div class="screen empty" id="screen"><div class="empty-state"><div class="clapper">🎬</div><h2>Ваш киносеанс начинается здесь</h2><p>Вставьте ссылку на видео или страницу с фильмом ниже, затем пригласите второго зрителя.</p></div></div><div class="player-bottom"><div style="min-width:0"><div class="film-title" id="filmTitle">Фильм пока не выбран</div><div class="film-meta" id="filmMeta">Добавьте источник, чтобы начать просмотр</div></div><span class="pill" id="syncPill">● ОЖИДАЕМ</span></div></section>
-      <h2 class="section-title">Источник просмотра <small>Можно изменить в любое время</small></h2><form class="card source" id="sourceForm"><label for="sourceUrl">Ссылка на видео или страницу фильма</label><div class="source-row"><input id="sourceUrl" type="url" inputmode="url" placeholder="https://example.com/film" autocomplete="url" required><button class="primary" type="submit">Добавить фильм →</button></div><div class="hint">Прямые видеофайлы синхронизируются автоматически. Внешние сайты могут запрещать встраивание и управление плеером — тогда откройте страницу отдельно.</div></form>
+      <h2 class="section-title">Источник просмотра <small id="sourceRole">Настройки владельца</small></h2><form class="card source" id="sourceForm"><label for="sourceUrl">Ссылка на видео или страницу фильма</label><div class="source-row"><input id="sourceUrl" type="url" inputmode="url" placeholder="https://rutube.ru/video/..." autocomplete="url" required><button class="primary" type="submit">Добавить фильм →</button></div><div class="hint">RUTUBE откроется через встроенный плеер. Прямые видеофайлы синхронизируются автоматически. Прокси для зарубежного сайта задайте в браузере на каждом устройстве: сайт не может переключить прокси для встроенного плеера.</div></form>
       <h2 class="section-title">В этой комнате <small>Максимум два зрителя</small></h2><div class="participants" id="participants"><div class="person waiting"><div class="p-avatar">…</div><div class="details"><b>Подключаемся</b><span>Пожалуйста, подождите</span></div></div></div>
     </div><aside class="side"><section class="card chat" aria-label="Чат комнаты"><div class="chat-head"><b>Чат комнаты</b><span id="onlineCount">0 / 2 онлайн</span></div><div class="messages" id="messages"><div class="chat-empty"><div>💬</div>Сообщения появятся здесь.<br>Начните разговор!</div></div><div class="reactions" aria-label="Быстрые реакции"><button data-reaction="🍿" title="Попкорн">🍿</button><button data-reaction="😂" title="Смешно">😂</button><button data-reaction="😮" title="Удивление">😮</button><button data-reaction="❤️" title="Сердце">❤️</button></div><form class="chat-input" id="chatForm"><input id="chatText" maxlength="1000" placeholder="Напишите сообщение..." aria-label="Сообщение"><button type="submit" aria-label="Отправить">➤</button></form></section><div class="note"><b>На заметку</b><br>Ссылка на комнату работает для двух зрителей. Если видеосайт запрещает встраивание, откройте его в отдельной вкладке и общайтесь здесь.</div></aside></div>
   </main>
@@ -65,6 +65,12 @@
   const text = (el, value) => { el.textContent = value; return el; };
   const time = (n) => new Date(n).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
   const sourceLabel = (url) => { try { return new URL(url).hostname.replace(/^www\./,''); } catch { return 'Источник'; } };
+  const embedUrl = (url) => {
+    const u = new URL(url);
+    if (!['rutube.ru', 'www.rutube.ru'].includes(u.hostname)) return url;
+    const match = u.pathname.match(/^\/(?:video\/(?:private\/)?|play\/embed\/)([a-f0-9]{32})(?:\/|$)/i);
+    return match ? 'https://rutube.ru/play/embed/' + match[1] + (u.searchParams.has('p') ? '/?p=' + encodeURIComponent(u.searchParams.get('p')) : '') : url;
+  };
   const effectiveTime = (room) => room.position + (room.playing ? Math.max(0, (Date.now() - room.updated_at) / 1000) : 0);
   function renderPlayer(room) {
     const kind = typeOf(room.media_url);
@@ -94,7 +100,7 @@
       video.addEventListener('error', () => toast('Видео не загрузилось. Проверьте ссылку или доступ к файлу.'));
       screen.append(video); syncVideo(room); return;
     }
-    const frame = document.createElement('iframe'); frame.src = room.media_url; frame.title = 'Внешний видеосайт'; frame.allow = 'fullscreen; autoplay; encrypted-media; picture-in-picture'; frame.allowFullscreen = true; frame.referrerPolicy = 'no-referrer';
+    const frame = document.createElement('iframe'); frame.src = embedUrl(room.media_url); frame.title = 'Внешний видеосайт'; frame.allow = 'fullscreen; autoplay; encrypted-media; picture-in-picture; clipboard-write'; frame.allowFullscreen = true;
     screen.append(frame);
     const help = document.createElement('div'); help.className = 'embed-help';
     const line = document.createElement('span'); line.textContent = 'Если сайт не открылся здесь, он запрещает встраивание. Просмотр на внешнем сайте не синхронизируется автоматически.';
@@ -155,6 +161,9 @@
     try {
       const next = await request('poll');
       renderPlayer(next.room); state = next.room;
+      const owner = next.room.owner_id === clientId;
+      $('sourceForm').hidden = !owner;
+      $('sourceRole').textContent = owner ? 'Настройки владельца' : 'Источник выбирает владелец';
       renderParticipants(next.participants); renderMessages(next.messages);
     } catch(e) {
       $('playerStatus').textContent = 'Нет соединения';
@@ -189,3 +198,4 @@
 </script>
 </body>
 </html>
+
