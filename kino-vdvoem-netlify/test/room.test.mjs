@@ -36,9 +36,10 @@ test('two viewers share chat, media and playback; third viewer cannot join', asy
   const store = fakeStore();
   assert.equal((await call(store, user1)).status, 200);
   assert.equal((await call(store, user2)).data.participants.length, 2);
+  assert.equal((await call(store, user2, 'media', { url: 'https://example.com/wrong.mp4' })).status, 403);
   assert.equal((await call(store, user3)).status, 403);
   await call(store, user1, 'message', { body: 'Привет!' });
-  await call(store, user2, 'media', { url: 'https://example.com/video.mp4' });
+  await call(store, user1, 'media', { url: 'https://example.com/video.mp4' });
   await call(store, user1, 'playback', { playing: true, position: 42 });
   const current = await call(store, user2);
   assert.equal(current.data.messages[0].body, 'Привет!');
@@ -55,3 +56,4 @@ test('invalid input is rejected without changing the room', async () => {
   assert.equal((await call(store, user1, 'playback', { playing: true, position: -1 })).status, 400);
   assert.equal((await call(store, user1)).data.room.media_url, '');
 });
+
