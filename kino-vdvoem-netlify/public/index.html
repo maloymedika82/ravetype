@@ -66,7 +66,7 @@
   let frame = null, rutubeReady = false, rutubeTime = 0, rutubeApplyingUntil = 0, seenMessageIds = null;
   const originalTitle = document.title;
   window.addEventListener('focus', () => { document.title = originalTitle; });
-  const isRutube = url => { try { const u = new URL(url); return ['rutube.ru','www.rutube.ru'].includes(u.hostname) && /^\/play\/embed\//.test(embedUrl(url).replace(u.origin,'')); } catch { return false; } };
+  const isRutube = url => { try { const u = new URL(url); return ['rutube.ru','www.rutube.ru'].includes(u.hostname) && /^\/play\/embed\//.test(new URL(embedUrl(url)).pathname); } catch { return false; } };
   const rutubeCommand = (type, data = {}) => { if (rutubeReady && frame?.contentWindow) frame.contentWindow.postMessage(JSON.stringify({type,data}), 'https://rutube.ru'); };
   window.addEventListener('message', event => {
     if (event.origin !== 'https://rutube.ru' || !frame || event.source !== frame.contentWindow || !isRutube(state?.media_url || '')) return;
