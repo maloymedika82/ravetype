@@ -315,10 +315,10 @@
     if (!session || busy) return;
     busy = true;
     try {
-      const { voice } = await req('poll');
-      if (!voice.members.some(v => v.client_id === clientId && v.session === session)) { await leave(); return; }
-      if (voice.members.length < 2) { close(); status.textContent = 'Ждём второго участника в звонке'; return; }
-      const caller = [...voice.members].sort((a, b) => a.client_id.localeCompare(b.client_id))[0].client_id === clientId;
+      const { voice } = await req('poll', {session});
+      if (!voice.members.some(v => v.session === session)) { await leave(); return; }
+      if (voice.members.length < 2) { close(); status.textContent = 'В звонке 1/2 · проверьте ссылку комнаты у партнёра'; return; }
+      const caller = [...voice.members].sort((a, b) => a.session.localeCompare(b.session))[0].session === session;
       if (caller && !voice.offer && !pc) {
         const c = connect(); await c.setLocalDescription(await c.createOffer()); await ice(c);
         if (session) await req('voice', { type: 'offer', session, sdp: c.localDescription.sdp });
