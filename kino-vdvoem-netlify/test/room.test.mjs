@@ -91,3 +91,37 @@ test('TURN credentials require a joined voice session and never expose server ke
     else process.env.CLOUDFLARE_TURN_API_TOKEN = previousToken;
   }
 });
+
+test('Metered TURN uses a server-side key and rejects invalid app hosts', async () => {
+  const store = fakeStore();
+  const session = '5'.repeat(32);
+  const previousFetch = globalThis.fetch;
+  const previousApp = process.env.METERED_TURN_APP;
+  const previousKey = process.env.METERED_TURN_API_KEY;
+  try {
+    process.env.METERED_TURN_APP = 'movie-room';
+    process.env.METERED_TURN_API_KEY = 'private-key';
+    let issued = 0;
+    globalThis.fetch = async (url) => {
+      issued++;
+      assert.equal(url, 'https://movie-room.metered.live/api/v1/turn/credentials?apiKey=private-key');
+      return new Response(JSON.stringify([{ urls: 'turns:relay.metered.ca:443', username: 'short', credential: 'short-secret' }]));
+    };
+    assert.equal((await call(store, user1, 'ice', { session })).status, 403);
+    assert.equal(issued, 0);
+    assert.equal((await call(store, user1, 'voice', { type: 'join', session })).status, 200);
+    const result = await call(store, user1, 'ice', { session });
+    assert.equal(result.status, 200);
+    assert.equal(result.data.iceServers[0].username, 'short');
+    assert.equal(JSON.stringify(result.data).includes('private-key'), false);
+    process.env.METERED_TURN_APP = 'localhost.evil';
+    assert.equal((await call(store, user1, 'ice', { session })).status, 503);
+    assert.equal(issued, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousApp === undefined) delete process.env.METERED_TURN_APP;
+    else process.env.METERED_TURN_APP = previousApp;
+    if (previousKey === undefined) delete process.env.METERED_TURN_API_KEY;
+    else process.env.METERED_TURN_API_KEY = previousKey;
+  }
+});
