@@ -79,12 +79,15 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
       if (action === 'media' && state.owner_id !== clientId) return json({ error: 'Источник может менять только владелец комнаты' }, 403);
 
       // Presence is refreshed every 10 seconds to keep polling inexpensive.
-      const needsWrite = ownerAssigned || action !== 'poll' || !member || member.name !== name || now - member.last_seen >= 10000 || participants.length !== state.participants.length;
+      const voiceHeartbeat = state.voice?.members.some(v => v.session === data.session && now - v.last_seen >= 10000);
+      const needsWrite = ownerAssigned || action !== 'poll' || !member || member.name !== name || now - member.last_seen >= 10000 || participants.length !== state.participants.length || voiceHeartbeat;
       if (!needsWrite) return json(snapshot(state, now));
       state.participants = participants;
       state.voice ||= { members: [], offer: null, answer: null };
       const priorVoiceCount = state.voice.members.length;
-      state.voice.members = state.voice.members.filter(v => participants.some(p => p.client_id === v.client_id));
+      state.voice.members = state.voice.members.filter(v => v.last_seen > now - 30000 && participants.some(p => p.client_id === v.client_id));
+      const voiceMember = state.voice.members.find(v => v.session === data.session && v.client_id === clientId);
+      if (voiceMember) voiceMember.last_seen = now;
       if (state.voice.members.length !== priorVoiceCount) state.voice.offer = state.voice.answer = null;
       if (member) { member.name = name; member.last_seen = now; }
       else state.participants.push({ client_id: clientId, name, last_seen: now });
@@ -98,21 +101,21 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
         state.messages = state.messages.slice(-80);
       } else if (action === 'voice') {
         const voice = state.voice;
-        const current = voice.members.find(v => v.client_id === clientId);
+        const current = voice.members.find(v => v.session === data.session && v.client_id === clientId);
         if (data.type === 'join') {
-          if (!current || current.session !== data.session) {
-            voice.members = voice.members.filter(v => v.client_id !== clientId);
-            voice.members.push({ client_id: clientId, session: data.session });
+          if (!current) {
+            if (voice.members.length >= 2) return json({ error: 'В звонке уже два человека' }, 403);
+            voice.members.push({ client_id: clientId, session: data.session, last_seen: now });
             voice.offer = voice.answer = null;
           }
         } else if (data.type === 'leave') {
-          voice.members = voice.members.filter(v => v.client_id !== clientId);
+          voice.members = voice.members.filter(v => v.session !== data.session || v.client_id !== clientId);
           voice.offer = voice.answer = null;
         } else {
           if (!current || current.session !== data.session || voice.members.length !== 2) return json({ error: 'Сначала войдите в голосовой чат вдвоём' }, 400);
-          const ordered = [...voice.members].sort((a, b) => a.client_id.localeCompare(b.client_id));
-          if ((data.type === 'offer' && ordered[0].client_id !== clientId) ||
-              (data.type === 'answer' && (ordered[1].client_id !== clientId || !voice.offer))) return json({ error: 'Неверное состояние звонка' }, 400);
+          const ordered = [...voice.members].sort((a, b) => a.session.localeCompare(b.session));
+          if ((data.type === 'offer' && ordered[0].session !== data.session) ||
+              (data.type === 'answer' && (ordered[1].session !== data.session || !voice.offer))) return json({ error: 'Неверное состояние звонка' }, 400);
           voice[data.type] = { client_id: clientId, session: data.session, peer_session: ordered[data.type === 'offer' ? 1 : 0].session, sdp: data.sdp };
         }
       }
