@@ -91,6 +91,16 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
       if (action === 'ice') {
         const joined = state.voice?.members.some(v => v.client_id === clientId && v.session === data.session && v.last_seen > now - 30000);
         if (!joined) return json({ error: 'Сначала войдите в голосовой чат' }, 403);
+        const meteredApp = process.env.METERED_TURN_APP;
+        const meteredKey = process.env.METERED_TURN_API_KEY;
+        if (meteredApp && meteredKey) {
+          if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(meteredApp)) return json({ error: 'Неверное имя Metered приложения' }, 503);
+          const response = await fetch('https://' + meteredApp + '.metered.live/api/v1/turn/credentials?apiKey=' + encodeURIComponent(meteredKey));
+          if (!response.ok) return json({ error: 'Не удалось получить данные Metered TURN' }, 502);
+          const iceServers = await response.json();
+          if (!Array.isArray(iceServers) || !iceServers.some(server => server.username && server.credential)) return json({ error: 'Неверный ответ Metered TURN' }, 502);
+          return json({ iceServers });
+        }
         const keyId = process.env.CLOUDFLARE_TURN_KEY_ID;
         const keyToken = process.env.CLOUDFLARE_TURN_API_TOKEN;
         if (!keyId || !keyToken) return json({ error: 'TURN ещё не настроен на сервере' }, 503);
