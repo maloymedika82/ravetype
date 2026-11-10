@@ -29,6 +29,7 @@
     .voice-head{display:flex;align-items:center;gap:12px}.voice-icon{width:38px;height:38px;flex:none;display:grid;place-items:center;border-radius:12px;color:#d8c6ff;background:#382a53;font-size:20px}
     .voice-title{font-size:13px;font-weight:800;line-height:1.2}.voice-status{margin-top:5px;color:#a8a2b5;font-size:11px;line-height:1.45;display:flex;align-items:center;gap:7px}.voice-pulse{width:7px;height:7px;flex:none;border-radius:50%;background:#777181}.voice-card:has(#voice-mute:not([hidden])) .voice-pulse{background:#aa8aff;box-shadow:0 0 0 4px #aa8aff25}
     .voice-actions{display:flex;gap:8px;align-items:stretch}.voice-actions button{min-height:42px;border-radius:10px;font-size:11px;font-weight:800;line-height:1.25;padding:8px 12px;transition:filter .15s,background .15s}.voice-actions button:hover{filter:brightness(1.12)}.voice-join{flex:1;border:0;background:#a586ff;color:#20152e}.voice-card:has(#voice-mute:not([hidden])) .voice-join{background:#332b3d;color:#dfd6ed;border:1px solid #5c4b6d}.voice-mute{flex:1;border:1px solid #695485;background:#2e2440;color:#decfff}.voice-mute[aria-pressed="true"]{background:#4b2935;border-color:#865565;color:#ffd8df}
+    .voice-volume{display:grid;gap:9px;padding-top:13px;border-top:1px solid #ffffff18}.voice-volume-label{display:flex;justify-content:space-between;gap:10px;color:#c6bed1;font-size:11px;font-weight:700}.voice-volume-output{color:#d9c7ff;font-variant-numeric:tabular-nums}.voice-volume input{width:100%;margin:0;accent-color:#a586ff;cursor:pointer}
     @media(max-width:380px){.voice-actions{flex-direction:column}}
   </style>
 </head>
@@ -204,9 +205,13 @@
   if (!id || !navigator.mediaDevices?.getUserMedia) return;
   const box = document.createElement('section');
   box.className = 'card voice-card';
-  box.innerHTML = '<div class="voice-head"><span class="voice-icon" aria-hidden="true">♫</span><div><div class="voice-title">Голосовой чат</div><div class="voice-status"><span class="voice-pulse" aria-hidden="true"></span><span id="voice-status" role="status">Микрофон выключен</span></div></div></div><div class="voice-actions"><button id="voice-join" class="voice-join" type="button">Войти в звонок</button><button id="voice-mute" class="voice-mute" type="button" aria-pressed="false" hidden>Выключить микрофон</button></div><audio id="voice-audio" autoplay></audio>';
+  box.innerHTML = '<div class="voice-head"><span class="voice-icon" aria-hidden="true">♫</span><div><div class="voice-title">Голосовой чат</div><div class="voice-status"><span class="voice-pulse" aria-hidden="true"></span><span id="voice-status" role="status">Микрофон выключен</span></div></div></div><div class="voice-actions"><button id="voice-join" class="voice-join" type="button">Войти в звонок</button><button id="voice-mute" class="voice-mute" type="button" aria-pressed="false" hidden>Выключить микрофон</button></div><div class="voice-volume"><label class="voice-volume-label" for="voice-volume">Громкость собеседника <output id="voice-volume-output" class="voice-volume-output" for="voice-volume">100%</output></label><input id="voice-volume" type="range" min="0" max="100" value="100" aria-label="Громкость собеседника"></div><audio id="voice-audio" autoplay></audio>';
   document.querySelector('aside.side').prepend(box);
-  const q = s => box.querySelector(s), status = q('#voice-status'), join = q('#voice-join'), mute = q('#voice-mute'), audio = q('#voice-audio');
+  const q = s => box.querySelector(s), status = q('#voice-status'), join = q('#voice-join'), mute = q('#voice-mute'), audio = q('#voice-audio'), volume = q('#voice-volume'), volumeOutput = q('#voice-volume-output');
+  const savedVolume = localStorage.getItem('kino-vdvoem-voice-volume');
+  if (savedVolume !== null && Number.isFinite(Number(savedVolume))) volume.value = Math.min(100, Math.max(0, Number(savedVolume)));
+  function applyVolume() { audio.volume = Number(volume.value) / 100; volumeOutput.value = volume.value + '%'; localStorage.setItem('kino-vdvoem-voice-volume', volume.value); }
+  volume.addEventListener('input', applyVolume); applyVolume();
   const clientId = localStorage.getItem('kino-vdvoem-id');
   let session, stream, pc, busy = false;
   const hex = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
