@@ -297,17 +297,17 @@
   const ice = c => new Promise(done => {
     if (c.iceGatheringState === 'complete') return done();
     const changed = () => { if (c.iceGatheringState === 'complete') { clearTimeout(timer); c.removeEventListener('icegatheringstatechange', changed); done(); } };
-    const timer = setTimeout(() => { c.removeEventListener('icegatheringstatechange', changed); done(); }, 10000);
+    const timer = setTimeout(() => { c.removeEventListener('icegatheringstatechange', changed); done(); }, 20000);
     c.addEventListener('icegatheringstatechange', changed);
   });
   function connect() {
     close();
-    const connection = pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    const connection = pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] });
     stream.getTracks().forEach(t => connection.addTrack(t, stream));
     connection.ontrack = e => { audio.srcObject = e.streams[0]; audio.play().catch(() => status.textContent = 'Нажмите на страницу, чтобы включить звук'); };
     connection.onconnectionstatechange = () => {
       if (pc !== connection) return;
-      status.textContent = connection.connectionState === 'connected' ? 'Вы разговариваете' : connection.connectionState === 'failed' ? 'Нет соединения — выйдите и войдите снова' : 'Подключаем звук…';
+      status.textContent = connection.connectionState === 'connected' ? 'Вы разговариваете' : connection.connectionState === 'failed' ? 'Прямое соединение не удалось · нужен TURN-сервер' : 'Подключаем звук…';
     };
     return connection;
   }
@@ -321,15 +321,17 @@
       const caller = [...voice.members].sort((a, b) => a.session.localeCompare(b.session))[0].session === session;
       if (caller && !voice.offer && !pc) {
         const c = connect(); await c.setLocalDescription(await c.createOffer()); await ice(c);
+        if (c.iceGatheringState !== 'complete') throw Error('ICE gathering timeout');
         if (session) await req('voice', { type: 'offer', session, sdp: c.localDescription.sdp });
       } else if (!caller && voice.offer?.peer_session === session && !pc) {
         const c = connect(); await c.setRemoteDescription({ type: 'offer', sdp: voice.offer.sdp });
         await c.setLocalDescription(await c.createAnswer()); await ice(c);
+        if (c.iceGatheringState !== 'complete') throw Error('ICE gathering timeout');
         if (session) await req('voice', { type: 'answer', session, sdp: c.localDescription.sdp });
       } else if (caller && voice.answer?.peer_session === session && pc?.signalingState === 'have-local-offer') {
         await pc.setRemoteDescription({ type: 'answer', sdp: voice.answer.sdp });
       }
-    } catch { status.textContent = 'Ошибка подключения — выйдите и войдите снова'; }
+    } catch (error) { close(); status.textContent = error.message === 'ICE gathering timeout' ? 'Не удалось найти сетевой путь · попробуйте другую сеть' : 'Ошибка подключения · выйдите и войдите снова'; }
     finally { busy = false; }
   }
   join.onclick = async () => {
