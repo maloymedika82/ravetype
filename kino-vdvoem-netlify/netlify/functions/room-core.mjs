@@ -8,9 +8,9 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), {
 
 async function readBody(request) {
   if (!request.headers.get('content-type')?.startsWith('application/json')) throw new SyntaxError();
-  if (Number(request.headers.get('content-length') || 0) > 12000) throw new SyntaxError();
+  if (Number(request.headers.get('content-length') || 0) > 60000) throw new SyntaxError();
   const raw = await request.text();
-  if (raw.length > 12000) throw new SyntaxError();
+  if (raw.length > 60000) throw new SyntaxError();
   return JSON.parse(raw);
 }
 
@@ -70,7 +70,7 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
     } else if (action === 'voice') {
       if (!['join', 'leave', 'offer', 'answer'].includes(data.type) ||
           (data.type !== 'leave' && !roomPattern.test(data.session || '')) ||
-          (['offer', 'answer'].includes(data.type) && (typeof data.sdp !== 'string' || data.sdp.length > 9000 || !data.sdp.length))) {
+          (['offer', 'answer'].includes(data.type) && (typeof data.sdp !== 'string' || data.sdp.length > 50000 || !data.sdp.length))) {
         return json({ error: 'Неверные данные голосового чата' }, 400);
       }
     }
