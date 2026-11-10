@@ -63,6 +63,22 @@
   if (!clientId || !/^[a-f0-9]{32}$/.test(clientId)) { clientId = makeId(); localStorage.setItem(key, clientId); }
   let name = localStorage.getItem(nameKey) || '';
   let state = null, lastRevision = -1, lastMessages = '', busy = false, applying = false, video = null, hls = null, toastTimer;
+  let frame = null, rutubeReady = false, rutubeTime = 0, rutubeApplyingUntil = 0, seenMessageIds = null;
+  const originalTitle = document.title;
+  window.addEventListener('focus', () => { document.title = originalTitle; });
+  const isRutube = url => { try { const u = new URL(url); return ['rutube.ru','www.rutube.ru'].includes(u.hostname) && /^\/play\/embed\//.test(embedUrl(url).replace(u.origin,'')); } catch { return false; } };
+  const rutubeCommand = (type, data = {}) => { if (rutubeReady && frame?.contentWindow) frame.contentWindow.postMessage(JSON.stringify({type,data}), 'https://rutube.ru'); };
+  window.addEventListener('message', event => {
+    if (event.origin !== 'https://rutube.ru' || !frame || event.source !== frame.contentWindow || !isRutube(state?.media_url || '')) return;
+    let message; try { message = typeof event.data === 'string' ? JSON.parse(event.data) : event.data; } catch { return; }
+    if (message.type === 'player:ready') { rutubeReady = true; syncRutube(state); }
+    if (message.type === 'player:currentTime' && Number.isFinite(Number(message.data?.time))) rutubeTime = Number(message.data.time);
+    if (message.type === 'player:changeState' && Date.now() > rutubeApplyingUntil && ['playing','paused'].includes(message.data?.state)) {
+      const playing = message.data.state === 'playing';
+      if (Boolean(state?.playing) !== playing) request('playback', {playing, position:rutubeTime}).then(next => { state = next.room; lastRevision = -1; }).catch(e => toast(e.message));
+    }
+  });
+  function syncRutube(room) { if (!room || !rutubeReady || !frame) return; rutubeApplyingUntil = Date.now() + 2500; rutubeCommand(room.playing ? 'player:play' : 'player:pause'); }
   const quality = document.createElement('label'); quality.className = 'quality-control'; quality.hidden = true; quality.textContent = 'Качество видео ';
   const qualitySelect = document.createElement('select'); qualitySelect.setAttribute('aria-label', 'Качество видео'); quality.append(qualitySelect);
   document.querySelector('.player-bottom').after(quality);
@@ -96,11 +112,12 @@
       if (video && kind === 'video') syncVideo(room);
       return;
     }
+    if (frame && state?.media_url === room.media_url && kind === 'embed') { lastRevision = room.revision; if (isRutube(room.media_url)) syncRutube(room); return; }
     const oldUrl = state?.media_url || '';
     lastRevision = room.revision;
     if (oldUrl === room.media_url && video && kind === 'video') { syncVideo(room); return; }
     hls?.destroy(); hls = null; quality.hidden = true; qualitySelect.replaceChildren();
-    screen.replaceChildren(); screen.classList.toggle('empty', !room.media_url); video = null;
+    screen.replaceChildren(); screen.classList.toggle('empty', !room.media_url); video = null; frame = null; rutubeReady = false; rutubeTime = 0;
     if (!room.media_url) {
       const wrap = document.createElement('div'); wrap.className = 'empty-state';
       wrap.innerHTML = '<div class="clapper">🎬</div><h2>Ваш киносеанс начинается здесь</h2><p>Вставьте ссылку на видео или страницу с фильмом ниже, затем пригласите второго зрителя.</p>';
@@ -128,7 +145,7 @@
       video.addEventListener('error', () => toast('Видео не загрузилось. Проверьте ссылку или доступ к файлу.'));
       screen.append(video); syncVideo(room); return;
     }
-    const frame = document.createElement('iframe'); frame.src = embedUrl(room.media_url); frame.title = 'Внешний видеосайт'; frame.allow = 'fullscreen; autoplay; encrypted-media; picture-in-picture; clipboard-write'; frame.allowFullscreen = true;
+    frame = document.createElement('iframe'); frame.src = embedUrl(room.media_url); frame.title = 'Внешний видеосайт'; frame.allow = 'fullscreen; autoplay; encrypted-media; picture-in-picture; clipboard-write'; frame.allowFullscreen = true;
     screen.append(frame);
   }
   function syncVideo(room) {
@@ -188,6 +205,8 @@
   function renderMessages(messages) {
     const signature = messages.map(m => m.id).join(',');
     if (signature === lastMessages) return;
+    if (seenMessageIds) { const fresh = messages.filter(m => !seenMessageIds.has(m.id) && m.client_id !== clientId && Date.now() - m.created_at < 30000); if (fresh.length) { toast('Новое сообщение от ' + fresh[fresh.length-1].name); if (document.hidden) document.title = '● Новое сообщение · ' + originalTitle; } }
+    seenMessageIds = new Set(messages.map(m => m.id));
     lastMessages = signature;
     const box = $('messages'); const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
     box.replaceChildren();
