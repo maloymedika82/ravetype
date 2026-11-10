@@ -1,5 +1,5 @@
 const roomPattern = /^[a-f0-9]{32}$/;
-const actions = new Set(['poll', 'media', 'playback', 'message', 'voice']);
+const actions = new Set(['poll', 'media', 'playback', 'message', 'voice', 'manage']);
 
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
   status,
@@ -14,10 +14,10 @@ async function readBody(request) {
   return JSON.parse(raw);
 }
 
-function snapshot(state, now) {
+function snapshot(state, now, ownerToken = '') {
   return {
-    room: { ...state.room, owner_id: state.owner_id },
-    participants: state.participants.filter(p => p.last_seen > now - 30000).map(({ client_id, name }) => ({ client_id, name })),
+    room: { ...state.room, owner_id: state.owner_id, is_owner: Boolean(ownerToken), ...(ownerToken ? { owner_token: ownerToken } : {}) },
+    participants: state.participants.filter(p => p.last_seen > now - 30000).map(({ client_id, name, custom_name }) => ({ client_id, name: custom_name || name })),
     messages: state.messages,
     voice: state.voice || { members: [], offer: null, answer: null },
   };
@@ -29,13 +29,15 @@ function newState(id, now) {
     participants: [],
     messages: [],
     owner_id: null,
+    owner_token: null,
+    kicked: {},
     voice: { members: [], offer: null, answer: null },
   };
 }
 
 export async function handleRoomRequest(request, store, now = Date.now()) {
   const url = new URL(request.url);
-  const route = url.pathname.match(/^\/api\/room\/([a-f0-9]{32})\/(poll|media|playback|message|voice)\/?$/);
+  const route = url.pathname.match(/^\/api\/room\/([a-f0-9]{32})\/(poll|media|playback|message|voice|manage)\/?$/);
   if (request.method !== 'POST' || !route || !roomPattern.test(route[1]) || !actions.has(route[2])) return json({ error: 'Не найдено' }, 404);
   if (request.headers.get('origin') && request.headers.get('origin') !== url.origin) return json({ error: 'Неверный источник запроса' }, 403);
 
@@ -60,6 +62,9 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
     } else if (action === 'message') {
       body = typeof data.body === 'string' ? data.body.trim() : '';
       if (!body || body.length > 1000) return json({ error: 'Сообщение должно быть не длиннее 1000 символов' }, 400);
+    } else if (action === 'manage') {
+      if (!['rename', 'kick'].includes(data.type) || !roomPattern.test(data.target || '') ||
+          (data.type === 'rename' && (typeof data.newName !== 'string' || !data.newName.trim() || data.newName.trim().length > 24))) return json({ error: 'Неверные настройки участника' }, 400);
     } else if (action === 'voice') {
       if (!['join', 'leave', 'offer', 'answer'].includes(data.type) ||
           (data.type !== 'leave' && !roomPattern.test(data.session || '')) ||
@@ -73,15 +78,19 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
       const state = entry?.data || newState(id, now);
       const ownerAssigned = !state.owner_id;
       if (ownerAssigned) state.owner_id = clientId;
+      const tokenAssigned = (ownerAssigned || (!state.owner_token && state.owner_id === clientId));
+      if (tokenAssigned) state.owner_token = crypto.randomUUID().replace(/-/g, '');
+      const ownerToken = state.owner_id === clientId && state.owner_token === data.ownerToken || tokenAssigned && state.owner_id === clientId ? state.owner_token : '';
+      if (state.kicked?.[clientId] > now) return json({ error: 'Владелец удалил вас из комнаты' }, 403);
       const participants = state.participants.filter(p => p.last_seen > now - 30000);
       const member = participants.find(p => p.client_id === clientId);
       if (!member && participants.length >= 2) return json({ error: 'В комнате уже два зрителя' }, 403);
-      if (action === 'media' && state.owner_id !== clientId) return json({ error: 'Источник может менять только владелец комнаты' }, 403);
+      if (['media', 'manage'].includes(action) && !ownerToken) return json({ error: 'Источник может менять только владелец комнаты' }, 403);
 
       // Presence is refreshed every 10 seconds to keep polling inexpensive.
       const voiceHeartbeat = state.voice?.members.some(v => v.session === data.session && now - v.last_seen >= 10000);
-      const needsWrite = ownerAssigned || action !== 'poll' || !member || member.name !== name || now - member.last_seen >= 10000 || participants.length !== state.participants.length || voiceHeartbeat;
-      if (!needsWrite) return json(snapshot(state, now));
+      const needsWrite = ownerAssigned || tokenAssigned || action !== 'poll' || !member || member.name !== name || now - member.last_seen >= 10000 || participants.length !== state.participants.length || voiceHeartbeat;
+      if (!needsWrite) return json(snapshot(state, now, ownerToken));
       state.participants = participants;
       state.voice ||= { members: [], offer: null, answer: null };
       const priorVoiceCount = state.voice.members.length;
@@ -97,8 +106,19 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
       } else if (action === 'playback') {
         Object.assign(state.room, { playing: data.playing ? 1 : 0, position, updated_at: now, revision: state.room.revision + 1 });
       } else if (action === 'message') {
-        state.messages.push({ id: crypto.randomUUID(), client_id: clientId, name, body, created_at: now });
+        state.messages.push({ id: crypto.randomUUID(), client_id: clientId, name: member?.custom_name || name, body, created_at: now });
         state.messages = state.messages.slice(-80);
+      } else if (action === 'manage') {
+        if (data.target === state.owner_id) return json({ error: 'Нельзя изменить владельца' }, 400);
+        const target = state.participants.find(p => p.client_id === data.target);
+        if (!target) return json({ error: 'Участник не найден' }, 404);
+        if (data.type === 'rename') target.custom_name = data.newName.trim().replace(/\s+/g, ' ');
+        else {
+          state.participants = state.participants.filter(p => p.client_id !== data.target);
+          state.voice.members = state.voice.members.filter(v => v.client_id !== data.target);
+          state.voice.offer = state.voice.answer = null;
+          state.kicked ||= {}; state.kicked[data.target] = now + 3600000;
+        }
       } else if (action === 'voice') {
         const voice = state.voice;
         const current = voice.members.find(v => v.session === data.session && v.client_id === clientId);
@@ -122,7 +142,7 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
 
       // Conditional writes prevent one viewer from overwriting the other's message or playback change.
       const result = await store.setJSON(id, state, entry ? { onlyIfMatch: entry.etag } : { onlyIfNew: true });
-      if (result.modified) return json(snapshot(state, now));
+      if (result.modified) return json(snapshot(state, now, ownerToken));
     }
     return json({ error: 'Комната занята. Повторите действие.' }, 409);
   } catch (error) {
