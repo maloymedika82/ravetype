@@ -83,7 +83,9 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
       if (!needsWrite) return json(snapshot(state, now));
       state.participants = participants;
       state.voice ||= { members: [], offer: null, answer: null };
+      const priorVoiceCount = state.voice.members.length;
       state.voice.members = state.voice.members.filter(v => participants.some(p => p.client_id === v.client_id));
+      if (state.voice.members.length !== priorVoiceCount) state.voice.offer = state.voice.answer = null;
       if (member) { member.name = name; member.last_seen = now; }
       else state.participants.push({ client_id: clientId, name, last_seen: now });
 
