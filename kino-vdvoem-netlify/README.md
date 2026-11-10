@@ -14,13 +14,13 @@ Netlify установит зависимость `@netlify/blobs` из `package
 
 ## Голосовой чат через TURN
 
-Если в звонке видно «Не удалось найти сетевой путь», прямое соединение между двумя сетями не проходит. Для надёжного звука можно подключить [Cloudflare Realtime TURN](https://developers.cloudflare.com/realtime/turn/generate-credentials/):
+Если оба участника вошли в звонок, но видят «Не удалось найти сетевой путь», их сети не пропускают прямое соединение. [Metered Open Relay](https://www.metered.ca/tools/openrelay/) предоставляет 20 ГБ TURN-трафика в месяц без банковской карты:
 
-1. В панели Cloudflare откройте **Realtime → TURN** и создайте TURN key. Скопируйте **Token ID** и **API token** (не публикуйте их в GitHub).
-2. В новом сайте Netlify откройте **Project configuration → Environment variables** и добавьте `CLOUDFLARE_TURN_KEY_ID` = Token ID, `CLOUDFLARE_TURN_API_TOKEN` = API token. Область действия — Functions/All scopes, production.
-3. Запустите новый production deploy в Netlify. Затем оба зрителя обновляют комнату и снова входят в звонок.
+1. Создайте бесплатный аккаунт Metered и приложение. В адресе приложения вида `https://myapp.metered.live` запомните только `myapp`. В панели найдите API key для TURN credentials (не publishable key для Realtime Messaging).
+2. В Netlify нового сайта откройте **Project configuration → Environment variables** и добавьте `METERED_TURN_APP` = имя приложения (например, `myapp`), `METERED_TURN_API_KEY` = его TURN API key. Для ключа включите **Contains secret values**. Не публикуйте ключ в GitHub или чате.
+3. Запустите новый production deploy. Затем оба зрителя обновляют комнату и входят в голосовой чат заново.
 
-Сервер выдаёт временные TURN-данные только участнику, уже вошедшему в голосовой чат; секретный API token остаётся в Netlify. Без этих переменных сайт пробует прямую связь как раньше. Cloudflare заявляет бесплатный объём 1 000 ГБ, затем тарификацию — проверьте текущие условия и лимиты своего аккаунта перед включением.
+Сервер запрашивает TURN-доступ только для вошедшего в звонок участника и не отправляет постоянный API key в браузер. Если Metered не настроен, сайт может использовать ранее настроенный Cloudflare TURN через `CLOUDFLARE_TURN_KEY_ID` и `CLOUDFLARE_TURN_API_TOKEN`; без обоих сервисов остаётся прямая связь. Если заданы оба, используется Metered. Проверьте текущие лимиты бесплатного плана у провайдера перед использованием.
 
 ## Как работает просмотр
 
