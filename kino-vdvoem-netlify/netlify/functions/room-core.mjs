@@ -1,5 +1,5 @@
 const roomPattern = /^[a-f0-9]{32}$/;
-const actions = new Set(['poll', 'media', 'playback', 'message', 'voice', 'manage']);
+const actions = new Set(['poll', 'media', 'playback', 'message', 'voice', 'manage', 'ice']);
 
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
   status,
@@ -37,7 +37,7 @@ function newState(id, now) {
 
 export async function handleRoomRequest(request, store, now = Date.now()) {
   const url = new URL(request.url);
-  const route = url.pathname.match(/^\/api\/room\/([a-f0-9]{32})\/(poll|media|playback|message|voice|manage)\/?$/);
+  const route = url.pathname.match(/^\/api\/room\/([a-f0-9]{32})\/(poll|media|playback|message|voice|manage|ice)\/?$/);
   if (request.method !== 'POST' || !route || !roomPattern.test(route[1]) || !actions.has(route[2])) return json({ error: 'Не найдено' }, 404);
   if (request.headers.get('origin') && request.headers.get('origin') !== url.origin) return json({ error: 'Неверный источник запроса' }, 403);
 
@@ -65,6 +65,8 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
     } else if (action === 'manage') {
       if (!['rename', 'kick'].includes(data.type) || !roomPattern.test(data.target || '') ||
           (data.type === 'rename' && (typeof data.newName !== 'string' || !data.newName.trim() || data.newName.trim().length > 24))) return json({ error: 'Неверные настройки участника' }, 400);
+    } else if (action === 'ice') {
+      if (!roomPattern.test(data.session || '')) return json({ error: 'Неверный сеанс звонка' }, 400);
     } else if (action === 'voice') {
       if (!['join', 'leave', 'offer', 'answer'].includes(data.type) ||
           (data.type !== 'leave' && !roomPattern.test(data.session || '')) ||
@@ -86,6 +88,22 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
       const member = participants.find(p => p.client_id === clientId);
       if (!member && participants.length >= 2) return json({ error: 'В комнате уже два зрителя' }, 403);
       if (['media', 'manage'].includes(action) && !ownerToken) return json({ error: 'Источник может менять только владелец комнаты' }, 403);
+      if (action === 'ice') {
+        const joined = state.voice?.members.some(v => v.client_id === clientId && v.session === data.session && v.last_seen > now - 30000);
+        if (!joined) return json({ error: 'Сначала войдите в голосовой чат' }, 403);
+        const keyId = process.env.CLOUDFLARE_TURN_KEY_ID;
+        const keyToken = process.env.CLOUDFLARE_TURN_API_TOKEN;
+        if (!keyId || !keyToken) return json({ error: 'TURN ещё не настроен на сервере' }, 503);
+        const response = await fetch('https://rtc.live.cloudflare.com/v1/turn/keys/' + encodeURIComponent(keyId) + '/credentials/generate-ice-servers', {
+          method: 'POST',
+          headers: { authorization: 'Bearer ' + keyToken, 'content-type': 'application/json' },
+          body: JSON.stringify({ ttl: 3600 }),
+        });
+        if (!response.ok) return json({ error: 'Не удалось получить данные TURN' }, 502);
+        const turn = await response.json();
+        if (!Array.isArray(turn.iceServers) || !turn.iceServers.some(server => server.username && server.credential)) return json({ error: 'Неверный ответ TURN' }, 502);
+        return json({ iceServers: turn.iceServers });
+      }
 
       // Presence is refreshed every 10 seconds to keep polling inexpensive.
       const voiceHeartbeat = state.voice?.members.some(v => v.session === data.session && now - v.last_seen >= 10000);
