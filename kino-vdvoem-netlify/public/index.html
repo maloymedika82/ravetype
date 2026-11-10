@@ -192,6 +192,83 @@
   });
 })();
 </script>
+<script>
+(() => {
+  const id = location.pathname.match(/^\/r\/([a-f0-9]{32})/)?.[1];
+  if (!id || !navigator.mediaDevices?.getUserMedia) return;
+  const box = document.createElement('section');
+  box.className = 'card source';
+  box.innerHTML = '<b>Голосовой чат</b><p id="voice-status" class="hint" role="status">Микрофон выключен</p><button id="voice-join" class="primary" type="button" style="min-height:40px">Войти в звонок</button> <button id="voice-mute" type="button" hidden>Выключить микрофон</button><audio id="voice-audio" autoplay></audio>';
+  document.querySelector('aside.side').prepend(box);
+  const q = s => box.querySelector(s), status = q('#voice-status'), join = q('#voice-join'), mute = q('#voice-mute'), audio = q('#voice-audio');
+  const clientId = localStorage.getItem('kino-vdvoem-id');
+  let session, stream, pc, busy = false;
+  const hex = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+  async function req(action, data = {}) {
+    const response = await fetch('/api/room/' + id + '/' + action, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ clientId, name: localStorage.getItem('kino-vdvoem-name'), ...data }) });
+    const value = await response.json();
+    if (!response.ok) throw Error(value.error);
+    return value;
+  }
+  function close() { pc?.close(); pc = null; audio.srcObject = null; }
+  async function leave() {
+    const old = session; session = null; close();
+    stream?.getTracks().forEach(t => t.stop()); stream = null;
+    join.textContent = 'Войти в звонок'; mute.hidden = true; mute.textContent = 'Выключить микрофон'; status.textContent = 'Микрофон выключен';
+    if (old) try { await req('voice', { type: 'leave', session: old }); } catch {}
+  }
+  const ice = c => new Promise(done => {
+    if (c.iceGatheringState === 'complete') return done();
+    const changed = () => { if (c.iceGatheringState === 'complete') { clearTimeout(timer); c.removeEventListener('icegatheringstatechange', changed); done(); } };
+    const timer = setTimeout(() => { c.removeEventListener('icegatheringstatechange', changed); done(); }, 10000);
+    c.addEventListener('icegatheringstatechange', changed);
+  });
+  function connect() {
+    close();
+    const connection = pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    stream.getTracks().forEach(t => connection.addTrack(t, stream));
+    connection.ontrack = e => { audio.srcObject = e.streams[0]; audio.play().catch(() => status.textContent = 'Нажмите на страницу, чтобы включить звук'); };
+    connection.onconnectionstatechange = () => {
+      if (pc !== connection) return;
+      status.textContent = connection.connectionState === 'connected' ? 'Вы разговариваете' : connection.connectionState === 'failed' ? 'Нет соединения — выйдите и войдите снова' : 'Подключаем звук…';
+    };
+    return connection;
+  }
+  async function poll() {
+    if (!session || busy) return;
+    busy = true;
+    try {
+      const { voice } = await req('poll');
+      if (!voice.members.some(v => v.client_id === clientId && v.session === session)) { await leave(); return; }
+      if (voice.members.length < 2) { close(); status.textContent = 'Ждём второго участника в звонке'; return; }
+      const caller = [...voice.members].sort((a, b) => a.client_id.localeCompare(b.client_id))[0].client_id === clientId;
+      if (caller && !voice.offer && !pc) {
+        const c = connect(); await c.setLocalDescription(await c.createOffer()); await ice(c);
+        if (session) await req('voice', { type: 'offer', session, sdp: c.localDescription.sdp });
+      } else if (!caller && voice.offer?.peer_session === session && !pc) {
+        const c = connect(); await c.setRemoteDescription({ type: 'offer', sdp: voice.offer.sdp });
+        await c.setLocalDescription(await c.createAnswer()); await ice(c);
+        if (session) await req('voice', { type: 'answer', session, sdp: c.localDescription.sdp });
+      } else if (caller && voice.answer?.peer_session === session && pc?.signalingState === 'have-local-offer') {
+        await pc.setRemoteDescription({ type: 'answer', sdp: voice.answer.sdp });
+      }
+    } catch { status.textContent = 'Ошибка подключения — выйдите и войдите снова'; }
+    finally { busy = false; }
+  }
+  join.onclick = async () => {
+    if (session) return leave();
+    if (!localStorage.getItem('kino-vdvoem-name')) { status.textContent = 'Сначала войдите в комнату'; return; }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      session = hex(); await req('voice', { type: 'join', session });
+      join.textContent = 'Выйти из звонка'; mute.hidden = false; status.textContent = 'Ждём второго участника в звонке'; poll();
+    } catch { await leave(); status.textContent = 'Проверьте разрешение на микрофон'; }
+  };
+  mute.onclick = () => { const track = stream?.getAudioTracks()[0]; if (track) { track.enabled = !track.enabled; mute.textContent = track.enabled ? 'Выключить микрофон' : 'Включить микрофон'; } };
+  window.addEventListener('pagehide', () => { close(); stream?.getTracks().forEach(t => t.stop()); });
+  setInterval(poll, 1500);
+})();
+</script>
 </body>
 </html>
 
