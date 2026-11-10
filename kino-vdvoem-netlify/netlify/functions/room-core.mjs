@@ -1,5 +1,5 @@
 const roomPattern = /^[a-f0-9]{32}$/;
-const actions = new Set(['poll', 'media', 'playback', 'message']);
+const actions = new Set(['poll', 'media', 'playback', 'message', 'voice']);
 
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
   status,
@@ -8,9 +8,9 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), {
 
 async function readBody(request) {
   if (!request.headers.get('content-type')?.startsWith('application/json')) throw new SyntaxError();
-  if (Number(request.headers.get('content-length') || 0) > 3000) throw new SyntaxError();
+  if (Number(request.headers.get('content-length') || 0) > 12000) throw new SyntaxError();
   const raw = await request.text();
-  if (raw.length > 3000) throw new SyntaxError();
+  if (raw.length > 12000) throw new SyntaxError();
   return JSON.parse(raw);
 }
 
@@ -19,6 +19,7 @@ function snapshot(state, now) {
     room: { ...state.room, owner_id: state.owner_id },
     participants: state.participants.filter(p => p.last_seen > now - 30000).map(({ client_id, name }) => ({ client_id, name })),
     messages: state.messages,
+    voice: state.voice || { members: [], offer: null, answer: null },
   };
 }
 
@@ -28,12 +29,13 @@ function newState(id, now) {
     participants: [],
     messages: [],
     owner_id: null,
+    voice: { members: [], offer: null, answer: null },
   };
 }
 
 export async function handleRoomRequest(request, store, now = Date.now()) {
   const url = new URL(request.url);
-  const route = url.pathname.match(/^\/api\/room\/([a-f0-9]{32})\/(poll|media|playback|message)\/?$/);
+  const route = url.pathname.match(/^\/api\/room\/([a-f0-9]{32})\/(poll|media|playback|message|voice)\/?$/);
   if (request.method !== 'POST' || !route || !roomPattern.test(route[1]) || !actions.has(route[2])) return json({ error: 'Не найдено' }, 404);
   if (request.headers.get('origin') && request.headers.get('origin') !== url.origin) return json({ error: 'Неверный источник запроса' }, 403);
 
@@ -58,6 +60,12 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
     } else if (action === 'message') {
       body = typeof data.body === 'string' ? data.body.trim() : '';
       if (!body || body.length > 1000) return json({ error: 'Сообщение должно быть не длиннее 1000 символов' }, 400);
+    } else if (action === 'voice') {
+      if (!['join', 'leave', 'offer', 'answer'].includes(data.type) ||
+          (data.type !== 'leave' && !roomPattern.test(data.session || '')) ||
+          (['offer', 'answer'].includes(data.type) && (typeof data.sdp !== 'string' || data.sdp.length > 9000 || !data.sdp.length))) {
+        return json({ error: 'Неверные данные голосового чата' }, 400);
+      }
     }
 
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -74,6 +82,8 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
       const needsWrite = ownerAssigned || action !== 'poll' || !member || member.name !== name || now - member.last_seen >= 10000 || participants.length !== state.participants.length;
       if (!needsWrite) return json(snapshot(state, now));
       state.participants = participants;
+      state.voice ||= { members: [], offer: null, answer: null };
+      state.voice.members = state.voice.members.filter(v => participants.some(p => p.client_id === v.client_id));
       if (member) { member.name = name; member.last_seen = now; }
       else state.participants.push({ client_id: clientId, name, last_seen: now });
 
@@ -84,6 +94,25 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
       } else if (action === 'message') {
         state.messages.push({ id: crypto.randomUUID(), client_id: clientId, name, body, created_at: now });
         state.messages = state.messages.slice(-80);
+      } else if (action === 'voice') {
+        const voice = state.voice;
+        const current = voice.members.find(v => v.client_id === clientId);
+        if (data.type === 'join') {
+          if (!current || current.session !== data.session) {
+            voice.members = voice.members.filter(v => v.client_id !== clientId);
+            voice.members.push({ client_id: clientId, session: data.session });
+            voice.offer = voice.answer = null;
+          }
+        } else if (data.type === 'leave') {
+          voice.members = voice.members.filter(v => v.client_id !== clientId);
+          voice.offer = voice.answer = null;
+        } else {
+          if (!current || current.session !== data.session || voice.members.length !== 2) return json({ error: 'Сначала войдите в голосовой чат вдвоём' }, 400);
+          const ordered = [...voice.members].sort((a, b) => a.client_id.localeCompare(b.client_id));
+          if ((data.type === 'offer' && ordered[0].client_id !== clientId) ||
+              (data.type === 'answer' && (ordered[1].client_id !== clientId || !voice.offer))) return json({ error: 'Неверное состояние звонка' }, 400);
+          voice[data.type] = { client_id: clientId, session: data.session, peer_session: ordered[data.type === 'offer' ? 1 : 0].session, sdp: data.sdp };
+        }
       }
 
       // Conditional writes prevent one viewer from overwriting the other's message or playback change.
