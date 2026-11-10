@@ -57,3 +57,37 @@ test('invalid input is rejected without changing the room', async () => {
   assert.equal((await call(store, user1)).data.room.media_url, '');
 });
 
+
+test('TURN credentials require a joined voice session and never expose server key', async () => {
+  const store = fakeStore();
+  const session = '4'.repeat(32);
+  const previousFetch = globalThis.fetch;
+  const previousId = process.env.CLOUDFLARE_TURN_KEY_ID;
+  const previousToken = process.env.CLOUDFLARE_TURN_API_TOKEN;
+  try {
+    process.env.CLOUDFLARE_TURN_KEY_ID = 'test-key';
+    process.env.CLOUDFLARE_TURN_API_TOKEN = 'server-secret';
+    let issued = 0;
+    globalThis.fetch = async (url, options) => {
+      issued++;
+      assert.match(url, /\/credentials\/generate-ice-servers$/);
+      assert.equal(options.headers.authorization, 'Bearer server-secret');
+      assert.equal(JSON.parse(options.body).ttl, 3600);
+      return new Response(JSON.stringify({ iceServers: [{ urls: 'turns:turn.cloudflare.com:443?transport=tcp', username: 'short', credential: 'short-secret' }] }), { status: 201 });
+    };
+    assert.equal((await call(store, user1, 'ice', { session })).status, 403);
+    assert.equal(issued, 0);
+    assert.equal((await call(store, user1, 'voice', { type: 'join', session })).status, 200);
+    const result = await call(store, user1, 'ice', { session });
+    assert.equal(result.status, 200);
+    assert.equal(result.data.iceServers[0].username, 'short');
+    assert.equal(JSON.stringify(result.data).includes('server-secret'), false);
+    assert.equal(issued, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousId === undefined) delete process.env.CLOUDFLARE_TURN_KEY_ID;
+    else process.env.CLOUDFLARE_TURN_KEY_ID = previousId;
+    if (previousToken === undefined) delete process.env.CLOUDFLARE_TURN_API_TOKEN;
+    else process.env.CLOUDFLARE_TURN_API_TOKEN = previousToken;
+  }
+});
