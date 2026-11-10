@@ -63,7 +63,7 @@
   if (!clientId || !/^[a-f0-9]{32}$/.test(clientId)) { clientId = makeId(); localStorage.setItem(key, clientId); }
   let name = localStorage.getItem(nameKey) || '';
   let state = null, lastRevision = -1, lastMessages = '', busy = false, applying = false, video = null, hls = null, toastTimer;
-  let frame = null, rutubeReady = false, rutubeTime = 0, rutubeApplyingUntil = 0, seenMessageIds = null;
+  let frame = null, rutubeReady = false, rutubeTime = 0, rutubeApplyingUntil = 0, rutubeTickAt = 0, rutubeAlignedRevision = -1, seenMessageIds = null;
   const originalTitle = document.title;
   window.addEventListener('focus', () => { document.title = originalTitle; });
   const isRutube = url => { try { const u = new URL(url); return ['rutube.ru','www.rutube.ru'].includes(u.hostname) && /^\/play\/embed\//.test(new URL(embedUrl(url)).pathname); } catch { return false; } };
@@ -72,13 +72,28 @@
     if (event.origin !== 'https://rutube.ru' || !frame || event.source !== frame.contentWindow || !isRutube(state?.media_url || '')) return;
     let message; try { message = typeof event.data === 'string' ? JSON.parse(event.data) : event.data; } catch { return; }
     if (message.type === 'player:ready') { rutubeReady = true; syncRutube(state); }
-    if (message.type === 'player:currentTime' && Number.isFinite(Number(message.data?.time))) rutubeTime = Number(message.data.time);
+    if (message.type === 'player:currentTime' && Number.isFinite(Number(message.data?.time))) {
+      const now = Date.now(), nextTime = Number(message.data.time);
+      const expected = rutubeTime + (state?.playing ? (now - rutubeTickAt) / 1000 : 0);
+      const jumped = rutubeTickAt && Math.abs(nextTime - expected) > 5 && now > rutubeApplyingUntil;
+      rutubeTime = nextTime; rutubeTickAt = now;
+      if (jumped) request('playback', {playing: Boolean(state?.playing), position: nextTime}).then(next => { state = next.room; lastRevision = -1; rutubeAlignedRevision = next.room.revision; }).catch(e => toast(e.message));
+    }
     if (message.type === 'player:changeState' && Date.now() > rutubeApplyingUntil && ['playing','paused'].includes(message.data?.state)) {
       const playing = message.data.state === 'playing';
       if (Boolean(state?.playing) !== playing) request('playback', {playing, position:rutubeTime}).then(next => { state = next.room; lastRevision = -1; }).catch(e => toast(e.message));
     }
   });
-  function syncRutube(room) { if (!room || !rutubeReady || !frame) return; rutubeApplyingUntil = Date.now() + 2500; rutubeCommand(room.playing ? 'player:play' : 'player:pause'); }
+  function syncRutube(room) {
+    if (!room || !rutubeReady || !frame || rutubeAlignedRevision === room.revision) return;
+    rutubeAlignedRevision = room.revision;
+    rutubeApplyingUntil = Date.now() + 3500;
+    const target = effectiveTime(room);
+    if (Number.isFinite(target) && target >= 0 && Math.abs(rutubeTime - target) > 2) {
+      rutubeCommand('player:setCurrentTime', {time: target}); rutubeTime = target; rutubeTickAt = Date.now();
+    }
+    rutubeCommand(room.playing ? 'player:play' : 'player:pause');
+  }
   const quality = document.createElement('label'); quality.className = 'quality-control'; quality.hidden = true; quality.textContent = 'Качество видео ';
   const qualitySelect = document.createElement('select'); qualitySelect.setAttribute('aria-label', 'Качество видео'); quality.append(qualitySelect);
   document.querySelector('.player-bottom').after(quality);
@@ -117,7 +132,7 @@
     lastRevision = room.revision;
     if (oldUrl === room.media_url && video && kind === 'video') { syncVideo(room); return; }
     hls?.destroy(); hls = null; quality.hidden = true; qualitySelect.replaceChildren();
-    screen.replaceChildren(); screen.classList.toggle('empty', !room.media_url); video = null; frame = null; rutubeReady = false; rutubeTime = 0;
+    screen.replaceChildren(); screen.classList.toggle('empty', !room.media_url); video = null; frame = null; rutubeReady = false; rutubeTime = 0; rutubeTickAt = 0; rutubeAlignedRevision = -1;
     if (!room.media_url) {
       const wrap = document.createElement('div'); wrap.className = 'empty-state';
       wrap.innerHTML = '<div class="clapper">🎬</div><h2>Ваш киносеанс начинается здесь</h2><p>Вставьте ссылку на видео или страницу с фильмом ниже, затем пригласите второго зрителя.</p>';
