@@ -322,6 +322,7 @@
   volume.addEventListener('input', applyVolume); applyVolume();
   const clientId = localStorage.getItem('kino-vdvoem-id');
   let session, stream, pc, busy = false;
+  let iceServers = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }];
   const hex = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   async function req(action, data = {}) {
     const response = await fetch('/api/room/' + id + '/' + action, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ clientId, name: localStorage.getItem('kino-vdvoem-name'), ...data }) });
@@ -344,7 +345,7 @@
   });
   function connect() {
     close();
-    const connection = pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] });
+    const connection = pc = new RTCPeerConnection({ iceServers });
     stream.getTracks().forEach(t => connection.addTrack(t, stream));
     connection.ontrack = e => { audio.srcObject = e.streams[0]; audio.play().catch(() => status.textContent = 'Нажмите на страницу, чтобы включить звук'); };
     connection.onconnectionstatechange = () => {
@@ -382,6 +383,8 @@
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       session = hex(); await req('voice', { type: 'join', session });
+      try { iceServers = (await req('ice', { session })).iceServers; }
+      catch (error) { status.textContent = error.message || 'TURN не настроен — пробуем прямое соединение'; }
       join.textContent = 'Выйти из звонка'; mute.hidden = false; status.textContent = 'Ждём второго участника в звонке'; poll();
     } catch { await leave(); status.textContent = 'Проверьте разрешение на микрофон'; }
   };
