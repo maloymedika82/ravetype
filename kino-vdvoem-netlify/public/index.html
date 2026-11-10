@@ -31,7 +31,8 @@
     .voice-actions{display:flex;gap:8px;align-items:stretch}.voice-actions button{min-height:42px;border-radius:10px;font-size:11px;font-weight:800;line-height:1.25;padding:8px 12px;transition:filter .15s,background .15s}.voice-actions button:hover{filter:brightness(1.12)}.voice-join{flex:1;border:0;background:#a586ff;color:#20152e}.voice-card:has(#voice-mute:not([hidden])) .voice-join{background:#332b3d;color:#dfd6ed;border:1px solid #5c4b6d}.voice-mute{flex:1;border:1px solid #695485;background:#2e2440;color:#decfff}.voice-mute[aria-pressed="true"]{background:#4b2935;border-color:#865565;color:#ffd8df}
     .voice-volume{display:grid;gap:9px;padding-top:13px;border-top:1px solid #ffffff18}.voice-volume-label{display:flex;justify-content:space-between;gap:10px;color:#c6bed1;font-size:11px;font-weight:700}.voice-volume-output{color:#d9c7ff;font-variant-numeric:tabular-nums}.voice-volume input{width:100%;margin:0;accent-color:#a586ff;cursor:pointer}
     @media(max-width:380px){.voice-actions{flex-direction:column}}
-  </style>
+    .quality-control{display:flex;align-items:center;gap:8px;color:#aaa5bb;font-size:11px;padding:0 18px 14px}.quality-control select{background:#24202e;color:#f7f5fa;border:1px solid #514366;border-radius:8px;padding:6px 8px;font:inherit}
+</style>
 </head>
 <body>
 <div class="shell">
@@ -48,6 +49,7 @@
 </div>
 <div class="toast" id="toast" role="status"></div>
 <div class="modal-wrap" id="nameModal" hidden><form class="name-modal" id="nameForm"><div class="mark">▶</div><h2>Как вас зовут?</h2><p>Имя увидит только второй зритель в этой комнате. Вы сможете сразу начать чат.</p><label for="nameInput">ВАШЕ ИМЯ</label><input id="nameInput" maxlength="24" placeholder="Например, Саша" required autofocus><button class="primary" type="submit">Войти в комнату →</button><div class="error" id="nameError"></div></form></div>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.7.4/dist/hls.min.js" defer></script>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -60,7 +62,11 @@
   let clientId = localStorage.getItem(key);
   if (!clientId || !/^[a-f0-9]{32}$/.test(clientId)) { clientId = makeId(); localStorage.setItem(key, clientId); }
   let name = localStorage.getItem(nameKey) || '';
-  let state = null, lastRevision = -1, lastMessages = '', busy = false, applying = false, video = null, toastTimer;
+  let state = null, lastRevision = -1, lastMessages = '', busy = false, applying = false, video = null, hls = null, toastTimer;
+  const quality = document.createElement('label'); quality.className = 'quality-control'; quality.hidden = true; quality.textContent = 'Качество видео ';
+  const qualitySelect = document.createElement('select'); qualitySelect.setAttribute('aria-label', 'Качество видео'); quality.append(qualitySelect);
+  document.querySelector('.player-bottom').after(quality);
+  qualitySelect.addEventListener('change', () => { if (hls) hls.currentLevel = Number(qualitySelect.value); });
   const toast = (message) => { $('toast').textContent = message; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 3000); };
   const request = async (action, data = {}) => {
     const response = await fetch('/api/room/' + roomId + '/' + action, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({clientId,name,...data})});
@@ -68,7 +74,7 @@
     if (!response.ok) throw new Error(json.error || 'Не удалось подключиться');
     return json;
   };
-  const typeOf = (url) => { try { const u = new URL(url); return /\.(mp4|webm|ogg)$/i.test(u.pathname) ? 'video' : 'embed'; } catch { return 'none'; } };
+  const typeOf = (url) => { try { const u = new URL(url); return /\.(mp4|webm|ogg|m3u8)$/i.test(u.pathname) ? 'video' : 'embed'; } catch { return 'none'; } };
   const text = (el, value) => { el.textContent = value; return el; };
   const time = (n) => new Date(n).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
   const sourceLabel = (url) => { try { return new URL(url).hostname.replace(/^www\./,''); } catch { return 'Источник'; } };
@@ -93,6 +99,7 @@
     const oldUrl = state?.media_url || '';
     lastRevision = room.revision;
     if (oldUrl === room.media_url && video && kind === 'video') { syncVideo(room); return; }
+    hls?.destroy(); hls = null; quality.hidden = true; qualitySelect.replaceChildren();
     screen.replaceChildren(); screen.classList.toggle('empty', !room.media_url); video = null;
     if (!room.media_url) {
       const wrap = document.createElement('div'); wrap.className = 'empty-state';
@@ -100,7 +107,21 @@
       screen.append(wrap); return;
     }
     if (kind === 'video') {
-      video = document.createElement('video'); video.controls = true; video.playsInline = true; video.preload = 'metadata'; video.src = room.media_url;
+      video = document.createElement('video'); video.controls = true; video.playsInline = true; video.preload = 'metadata';
+      if (/\.m3u8$/i.test(new URL(room.media_url).pathname)) {
+        if (window.Hls?.isSupported()) {
+          hls = new Hls(); hls.loadSource(room.media_url); hls.attachMedia(video);
+          hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+            const levels = data.levels || [];
+            if (levels.length < 2) return;
+            qualitySelect.append(new Option('Авто', '-1'));
+            levels.forEach((level, index) => qualitySelect.append(new Option(level.height ? level.height + 'p' : Math.round(level.bitrate / 1000) + ' кбит/с', String(index))));
+            quality.hidden = false;
+          });
+          hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) toast('HLS-видео не загрузилось. Проверьте ссылку и доступ источника.'); });
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) video.src = room.media_url;
+        else toast('Этот браузер не поддерживает HLS-видео.');
+      } else video.src = room.media_url;
       video.addEventListener('play', () => { if (!applying) updatePlayback(true); });
       video.addEventListener('pause', () => { if (!applying && !video.ended) updatePlayback(false); });
       video.addEventListener('seeked', () => { if (!applying) updatePlayback(!video.paused); });
