@@ -1,4 +1,4 @@
-import { getStore } from '@netlify/blobs';
+import { getStore } from './store.mjs';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 
 export const config = { path: '/api/account/:action' };
