@@ -1,4 +1,4 @@
-import { getStore } from '@netlify/blobs';
+import { getStore } from './store.mjs';
 import { handleRoomRequest } from './room-core.mjs';
 
 export const config = { path: '/api/room/:id/:action' };
