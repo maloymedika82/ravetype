@@ -404,11 +404,11 @@
   const card = document.createElement('section');
   card.className = 'together-card';
   card.innerHTML = '<div class="together-top"><div><div class="together-title" id="togetherTitle">Смотрим вместе</div><div class="together-detail" id="togetherDetail">Ждём второго зрителя</div></div><div class="together-actions"><button type="button" id="alignButton" hidden>Снова вместе</button><button type="button" id="waitButton" hidden>Подожди меня</button></div></div>';
-  player.after(card);
+  player.append(card);
   const rate = document.createElement('section');
   rate.className = 'card rating-card';
   rate.innerHTML = '<h3>Ну как тебе?</h3><p>Оцените фильм каждый по-своему. Потом он останется в истории этой комнаты.</p><div class="rating-row" id="ratingRow"></div><div class="rating-summary" id="ratingSummary"></div>';
-  card.after(rate);
+  player.after(rate);
   for (let score = 1; score <= 5; score++) {
     const button = document.createElement('button'); button.type = 'button'; button.textContent = score + ' / 5';
     button.dataset.score = String(score); button.setAttribute('aria-label', 'Оценить фильм на ' + score + ' из 5');
@@ -445,7 +445,7 @@
     const own = position(), their = peer && peer.position + (peer.playing ? Math.max(0, (Date.now() - peer.at) / 1000) : 0);
     const delta = own !== null && their !== null ? their - own : null;
     $('alignButton').hidden = !enabled || delta === null || Math.abs(delta) < 3;
-    $('waitButton').hidden = !enabled;
+    $('waitButton').hidden = !enabled || Boolean(room.waiting_for && room.waiting_for !== id);
     $('waitButton').textContent = room.waiting_for === id ? 'Я вернулся' : 'Подожди меня';
     if (room.waiting_for) {
       $('togetherTitle').textContent = room.waiting_for === id ? 'Скоро вернусь' : (viewer?.name || 'Второй зритель') + ' скоро вернётся';
