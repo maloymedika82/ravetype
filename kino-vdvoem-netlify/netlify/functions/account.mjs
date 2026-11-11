@@ -22,6 +22,7 @@ export default async function handler(request) {
   if (!request.headers.get('content-type')?.startsWith('application/json')) return reply({ error: 'Неверный запрос' }, 400);
   let data;
   try { const raw = await request.text(); if (raw.length > 5000) throw Error(); data = JSON.parse(raw); } catch { return reply({ error: 'Неверный запрос' }, 400); }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return reply({ error: 'Неверный запрос' }, 400);
   const token = cookieToken(request), tokenHash = token && digest(token), now = Date.now();
   const store = accounts();
   for (let attempt = 0; attempt < 8; attempt++) {
