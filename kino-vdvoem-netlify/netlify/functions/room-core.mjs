@@ -1,5 +1,5 @@
 const roomPattern = /^[a-f0-9]{32}$/;
-const actions = new Set(['poll', 'media', 'playback', 'message', 'voice', 'manage', 'ice']);
+const actions = new Set(['poll', 'media', 'playback', 'message', 'voice', 'manage', 'ice', 'progress', 'wait', 'rate']);
 
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
   status,
@@ -20,6 +20,9 @@ function snapshot(state, now, ownerToken = '') {
     participants: state.participants.filter(p => p.last_seen > now - 30000).map(({ client_id, name, custom_name }) => ({ client_id, name: custom_name || name })),
     messages: state.messages,
     voice: state.voice || { members: [], offer: null, answer: null },
+    progress: (state.progress || []).filter(p => p.at > now - 18000 && p.media_url === state.room.media_url),
+    ratings: state.ratings || [],
+    history: state.history || [],
   };
 }
 
@@ -32,12 +35,13 @@ function newState(id, now) {
     owner_token: null,
     kicked: {},
     voice: { members: [], offer: null, answer: null },
+    progress: [], ratings: [], history: [],
   };
 }
 
 export async function handleRoomRequest(request, store, now = Date.now()) {
   const url = new URL(request.url);
-  const route = url.pathname.match(/^\/api\/room\/([a-f0-9]{32})\/(poll|media|playback|message|voice|manage|ice)\/?$/);
+  const route = url.pathname.match(/^\/api\/room\/([a-f0-9]{32})\/(poll|media|playback|message|voice|manage|ice|progress|wait|rate)\/?$/);
   if (request.method !== 'POST' || !route || !roomPattern.test(route[1]) || !actions.has(route[2])) return json({ error: 'Не найдено' }, 404);
   if (request.headers.get('origin') && request.headers.get('origin') !== url.origin) return json({ error: 'Неверный источник запроса' }, 403);
 
@@ -59,6 +63,13 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
     } else if (action === 'playback') {
       position = Number(data.position);
       if (typeof data.playing !== 'boolean' || !Number.isFinite(position) || position < 0 || position > 86400) return json({ error: 'Неверная позиция видео' }, 400);
+    } else if (action === 'progress') {
+      position = Number(data.position);
+      if (!Number.isFinite(position) || position < 0 || position > 86400 || typeof data.mediaUrl !== 'string' || data.mediaUrl.length > 1500) return json({ error: 'Неверная позиция' }, 400);
+    } else if (action === 'wait') {
+      if (typeof data.waiting !== 'boolean') return json({ error: 'Неверный статус' }, 400);
+    } else if (action === 'rate') {
+      if (!Number.isInteger(data.rating) || data.rating < 1 || data.rating > 5) return json({ error: 'Оцените от 1 до 5' }, 400);
     } else if (action === 'message') {
       body = typeof data.body === 'string' ? data.body.trim() : '';
       if (!body || body.length > 1000) return json({ error: 'Сообщение должно быть не длиннее 1000 символов' }, 400);
@@ -130,9 +141,30 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
       else state.participants.push({ client_id: clientId, name, last_seen: now });
 
       if (action === 'media') {
+        if (state.room.media_url && state.room.media_url !== media.href) {
+          state.history ||= [];
+          state.history.unshift({ media_url: state.room.media_url, watched_at: now, ratings: state.ratings || [] });
+          state.history = state.history.slice(0, 30);
+          state.ratings = [];
+          state.progress = [];
+        }
+        state.room.waiting_for = null;
         Object.assign(state.room, { media_url: media.href, playing: 0, position: 0, updated_at: now, revision: state.room.revision + 1 });
       } else if (action === 'playback') {
         Object.assign(state.room, { playing: data.playing ? 1 : 0, position, updated_at: now, revision: state.room.revision + 1 });
+      } else if (action === 'progress') {
+        if (data.mediaUrl !== state.room.media_url) return json(snapshot(state, now, ownerToken));
+        state.progress ||= [];
+        state.progress = state.progress.filter(p => p.client_id !== clientId && p.at > now - 18000);
+        state.progress.push({ client_id: clientId, position, playing: Boolean(data.playing), at: now, media_url: data.mediaUrl });
+      } else if (action === 'wait') {
+        state.room.waiting_for = data.waiting ? clientId : null;
+        Object.assign(state.room, { playing: data.waiting ? 0 : Number(Boolean(data.resume)), position: Number(data.position) >= 0 && Number(data.position) <= 86400 ? Number(data.position) : state.room.position, updated_at: now, revision: state.room.revision + 1 });
+      } else if (action === 'rate') {
+        if (!state.room.media_url) return json({ error: 'Сначала выберите фильм' }, 400);
+        state.ratings ||= [];
+        state.ratings = state.ratings.filter(r => r.client_id !== clientId);
+        state.ratings.push({ client_id: clientId, name: member?.custom_name || name, rating: data.rating, at: now });
       } else if (action === 'message') {
         state.messages.push({ id: crypto.randomUUID(), client_id: clientId, name: member?.custom_name || name, body, created_at: now });
         state.messages = state.messages.slice(-80);
