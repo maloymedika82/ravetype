@@ -501,7 +501,7 @@
   rate.querySelector('#ratingRow').onclick = async event => {
     const score = Number(event.target.closest('button[data-score]')?.dataset.score);
     if (!score) return;
-    try { await request('rate',{rating:score}); await tick(); } catch(e) { $('ratingSummary').textContent=e.message; }
+    try { await request('rate',{rating:score}); window.dispatchEvent(new CustomEvent('watch-rated',{detail:{roomId,clientId:id,rating:score}})); await tick(); } catch(e) { $('ratingSummary').textContent=e.message; }
   };
   async function tick() {
     if (!name() || busy) return; busy = true;
@@ -515,6 +515,103 @@
     } catch {} finally { busy=false; }
   }
   setInterval(tick,2500); setTimeout(tick,700);
+})();
+</script>
+<style>
+.account-panel{border-top:1px solid #36313e;margin-top:20px;padding-top:18px}
+.account-panel h3{font-size:15px;margin:0 0 7px}
+.account-panel p{font-size:12px;color:#aaa4b5;line-height:1.5;margin:0 0 14px}
+.account-panel form{display:grid;gap:9px;max-width:440px}
+.account-panel input{width:100%;background:#111117;border:1px solid #403a4b;color:#f7f5fa;border-radius:10px;padding:11px 12px;font:inherit;font-size:12px}
+.account-panel button{min-height:38px;border-radius:9px;border:1px solid #584772;background:#29223a;color:#e9dcff;font:inherit;font-size:12px;font-weight:700;padding:8px 12px;cursor:pointer}
+.account-panel button.account-primary{background:#a586ff;color:#1b1129;border:0}
+.account-panel .account-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.account-panel .account-error{color:#ffb5b5;min-height:18px}
+.account-panel .account-entry{padding:11px 0;border-top:1px solid #35303d}
+.account-panel .account-entry a{display:block;color:#ddccff;overflow-wrap:anywhere;font-size:12px}
+.account-panel .account-entry small{display:block;color:#a8a2b1;margin-top:5px}
+</style>
+<script>
+(() => {
+  const roomLibrary = document.querySelector('.library-card');
+  if (!roomLibrary) return;
+  const panel = document.createElement('section');
+  panel.className = 'account-panel';
+  roomLibrary.append(panel);
+  let account = null, mode = 'login';
+  const make = (tag, value, parent) => {
+    const node = document.createElement(tag);
+    if (value != null) node.textContent = value;
+    parent.append(node);
+    return node;
+  };
+  async function api(action, data = {}) {
+    const response = await fetch('/api/account/' + action, {
+      method: 'POST', credentials: 'same-origin', headers: {'content-type':'application/json'},
+      body: JSON.stringify(data)
+    });
+    const result = await response.json();
+    if (!response.ok) throw Error(result.error || 'Не получилось. Попробуйте ещё раз.');
+    return result;
+  }
+  function render() {
+    panel.replaceChildren();
+    make('h3', 'Профили для двоих', panel);
+    if (account?.user) {
+      make('p', 'Вы: ' + account.user.name + (account.partner ? ' · Вместе с ' + account.partner.name : ' · Второй профиль ещё не создан'), panel);
+      const actions = make('div', null, panel); actions.className = 'account-actions';
+      if (!account.partner) {
+        const invite = make('button', 'Новый код приглашения', actions); invite.type = 'button';
+        invite.onclick = async () => {
+          try {
+            const result = await api('rotate-invite');
+            const note = make('p', 'Код для второго профиля (сохраните сейчас): ' + result.inviteCode, panel);
+            note.style.color = '#dccbff';
+          } catch (error) { make('p', error.message, panel).className = 'account-error'; }
+        };
+      }
+      const logout = make('button', 'Выйти из профиля', actions); logout.type = 'button';
+      logout.onclick = async () => { await api('logout'); account = await api('status'); render(); };
+      make('h3', 'Общая библиотека', panel).style.marginTop = '19px';
+      if (!account.library?.length) make('p', 'После оценки фильм появится здесь и останется с вами в других комнатах.', panel);
+      for (const item of account.library || []) {
+        const row = make('div', null, panel); row.className = 'account-entry';
+        const link = make('a', item.media_url, row);
+        link.href = item.media_url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+        const scores = Object.entries(item.ratings || {}).map(([id, score]) =>
+          (id === account.user.id ? account.user.name : account.partner?.name || 'Второй зритель') + ' · ' + score + '/5').join('  ·  ');
+        make('small', scores || 'Пока без оценок', row);
+      }
+      return;
+    }
+    make('p', account?.hasPair ? 'Войдите, чтобы видеть общую историю из всех комнат.' : 'Создайте первый профиль для вашей пары. Второй человек войдёт по коду приглашения.', panel);
+    const form = make('form', null, panel);
+    const name = make('input', null, form); name.type = 'text'; name.placeholder = 'Ваше имя'; name.autocomplete = 'username'; name.required = true; name.maxLength = 24;
+    const password = make('input', null, form); password.type = 'password'; password.placeholder = 'Пароль (от 8 символов)'; password.autocomplete = mode === 'login' ? 'current-password' : 'new-password'; password.required = true; password.minLength = 8;
+    const code = make('input', null, form); code.type = 'text'; code.placeholder = account?.hasPair ? 'Код приглашения' : 'Код создания пары'; code.hidden = mode === 'login';
+    const submit = make('button', mode === 'login' ? 'Войти' : 'Создать профиль', form); submit.type = 'submit'; submit.className = 'account-primary';
+    const toggle = make('button', mode === 'login' ? 'Создать второй профиль' : 'Уже есть профиль? Войти', panel); toggle.type = 'button'; toggle.style.marginTop = '9px';
+    const error = make('p', '', panel); error.className = 'account-error'; error.setAttribute('role', 'alert');
+    toggle.onclick = () => { mode = mode === 'login' ? 'register' : 'login'; render(); };
+    form.onsubmit = async event => {
+      event.preventDefault(); error.textContent = '';
+      try {
+        const result = await api(mode, {name:name.value, password:password.value, code:code.value});
+        account = await api('status'); render();
+        if (result.inviteCode) {
+          const note = make('p', 'Код приглашения для партнёра (сохраните сейчас): ' + result.inviteCode, panel);
+          note.style.color = '#dccbff';
+        }
+      } catch (reason) { error.textContent = reason.message; }
+    };
+  }
+  api('status').then(result => { account = result; mode = result.hasPair ? 'login' : 'register'; render(); })
+    .catch(() => { panel.textContent = 'Профили сейчас недоступны'; });
+  window.addEventListener('watch-rated', async event => {
+    if (!account?.user) return;
+    try { await api('rate', event.detail); account = await api('status'); render(); }
+    catch (reason) { console.warn('Не удалось сохранить оценку в общей библиотеке:', reason.message); }
+  });
 })();
 </script>
 </body>
