@@ -33,6 +33,9 @@
     @media(max-width:380px){.voice-actions{flex-direction:column}}
     .quality-control{display:flex;align-items:center;gap:8px;color:#aaa5bb;font-size:11px;padding:0 18px 14px}.quality-control select{background:#24202e;color:#f7f5fa;border:1px solid #514366;border-radius:8px;padding:6px 8px;font:inherit}
 </style>
+<style>
+.together-card{margin-top:14px;padding:15px 17px;border:1px solid #41374f;background:linear-gradient(115deg,#211b2d,#191820);border-radius:15px}.together-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.together-title{font-size:13px;font-weight:800}.together-detail{font-size:11px;color:#a9a2b3;margin-top:4px}.together-actions{display:flex;gap:8px;flex-wrap:wrap}.together-actions button,.rating-row button,.library-toggle{border:1px solid #5c4b75;background:#30273f;color:#e8dfff;border-radius:9px;padding:9px 12px;font-size:11px;font-weight:800}.together-actions button:hover,.rating-row button:hover,.library-toggle:hover{background:#4a3862}.together-actions button:disabled{opacity:.45;cursor:default}.rating-card{margin-top:14px;padding:16px 17px}.rating-card h3{font-size:13px;margin:0 0 5px}.rating-card p{font-size:11px;color:#a9a2b3;margin:0 0 12px}.rating-row{display:flex;gap:7px;flex-wrap:wrap}.rating-row button[aria-pressed="true"]{background:#a586ff;color:#20162e}.rating-summary{font-size:11px;color:#beb4cd;margin-top:12px;line-height:1.6}.library-toggle{margin-top:14px}.library-card{padding:16px 17px;margin-top:10px}.library-card h3{font-size:14px;margin:0 0 5px}.library-card p{font-size:11px;color:#9690a3;margin:0 0 12px}.library-entry{padding:10px 0;border-top:1px solid #37323f}.library-entry b{font-size:11px;display:block;overflow-wrap:anywhere}.library-entry span{font-size:10px;color:#aaa3b8}.together-card button:focus-visible,.rating-card button:focus-visible,.library-toggle:focus-visible{outline:2px solid #cab7ff;outline-offset:2px}
+</style>
 </head>
 <body>
 <div class="shell">
@@ -391,6 +394,123 @@
   mute.onclick = () => { const track = stream?.getAudioTracks()[0]; if (track) { track.enabled = !track.enabled; mute.textContent = track.enabled ? 'Выключить микрофон' : 'Включить микрофон'; mute.setAttribute('aria-pressed', String(!track.enabled)); } };
   window.addEventListener('pagehide', () => { close(); stream?.getTracks().forEach(t => t.stop()); });
   setInterval(poll, 1500);
+})();
+</script>
+<script>
+(() => {
+  const roomId = location.pathname.match(/^\/r\/([a-f0-9]{32})\/?$/)?.[1];
+  if (!roomId) return;
+  const main = document.querySelector('.maincol'), player = document.querySelector('.player-card');
+  const card = document.createElement('section');
+  card.className = 'together-card';
+  card.innerHTML = '<div class="together-top"><div><div class="together-title" id="togetherTitle">Смотрим вместе</div><div class="together-detail" id="togetherDetail">Ждём второго зрителя</div></div><div class="together-actions"><button type="button" id="alignButton" hidden>Снова вместе</button><button type="button" id="waitButton" hidden>Подожди меня</button></div></div>';
+  player.after(card);
+  const rate = document.createElement('section');
+  rate.className = 'card rating-card';
+  rate.innerHTML = '<h3>Ну как тебе?</h3><p>Оцените фильм каждый по-своему. Потом он останется в истории этой комнаты.</p><div class="rating-row" id="ratingRow"></div><div class="rating-summary" id="ratingSummary"></div>';
+  card.after(rate);
+  for (let score = 1; score <= 5; score++) {
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = score + ' / 5';
+    button.dataset.score = String(score); button.setAttribute('aria-label', 'Оценить фильм на ' + score + ' из 5');
+    rate.querySelector('#ratingRow').append(button);
+  }
+  const libraryButton = document.createElement('button'); libraryButton.className = 'library-toggle'; libraryButton.type = 'button'; libraryButton.textContent = 'История просмотров этой комнаты';
+  const library = document.createElement('section'); library.className = 'card library-card'; library.hidden = true; library.innerHTML = '<h3>Наша библиотека</h3><p>Фильмы и ваши оценки сохраняются в этой комнате.</p><div id="libraryList"></div>';
+  rate.after(libraryButton, library);
+  libraryButton.onclick = () => { library.hidden = !library.hidden; libraryButton.setAttribute('aria-expanded', String(!library.hidden)); };
+  libraryButton.setAttribute('aria-expanded', 'false');
+  const $ = id => document.getElementById(id);
+  const id = localStorage.getItem('kino-vdvoem-id');
+  const name = () => localStorage.getItem('kino-vdvoem-name');
+  let current = null, lastReport = 0, ownPosition = null, rutubeAt = 0, peer = null, busy = false;
+  const direct = url => /\.(mp4|webm|ogg|m3u8)(?:[?#]|$)/i.test(url || '');
+  const rutube = url => { try { const host = new URL(url).hostname; return host === 'rutube.ru' || host === 'www.rutube.ru'; } catch { return false; } };
+  const supported = url => direct(url) || rutube(url);
+  const position = () => {
+    if (!current?.room?.media_url) return null;
+    if (direct(current.room.media_url)) return document.querySelector('#screen video')?.currentTime ?? null;
+    if (rutube(current.room.media_url) && ownPosition !== null && Date.now() - rutubeAt < 14000) return ownPosition + (current.room.playing ? (Date.now() - rutubeAt) / 1000 : 0);
+    return null;
+  };
+  async function request(action, extra = {}) {
+    const response = await fetch('/api/room/' + roomId + '/' + action, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({clientId:id,name:name(),...extra}) });
+    const result = await response.json(); if (!response.ok) throw Error(result.error); return result;
+  }
+  const label = url => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } };
+  function render(data) {
+    const room = data.room, enabled = Boolean(room.media_url && supported(room.media_url));
+    const viewer = data.participants.find(p => p.client_id !== id);
+    const reports = (data.progress || []).filter(p => p.media_url === room.media_url);
+    peer = reports.find(p => p.client_id !== id) || null;
+    const own = position(), their = peer && peer.position + (peer.playing ? Math.max(0, (Date.now() - peer.at) / 1000) : 0);
+    const delta = own !== null && their !== null ? their - own : null;
+    $('alignButton').hidden = !enabled || delta === null || Math.abs(delta) < 3;
+    $('waitButton').hidden = !enabled;
+    $('waitButton').textContent = room.waiting_for === id ? 'Я вернулся' : 'Подожди меня';
+    if (room.waiting_for) {
+      $('togetherTitle').textContent = room.waiting_for === id ? 'Скоро вернусь' : (viewer?.name || 'Второй зритель') + ' скоро вернётся';
+      $('togetherDetail').textContent = 'Просмотр на паузе для вас обоих';
+    } else if (!enabled) {
+      $('togetherTitle').textContent = 'Смотрим вместе';
+      $('togetherDetail').textContent = room.media_url ? 'Для этого сайта точное время недоступно' : 'Выберите фильм для двоих';
+    } else if (!viewer || delta === null) {
+      $('togetherTitle').textContent = 'Смотрим вместе';
+      $('togetherDetail').textContent = viewer ? 'Сверяем время просмотра…' : 'Ждём второго зрителя';
+    } else if (Math.abs(delta) < 3) {
+      $('togetherTitle').textContent = 'Смотрим вместе';
+      $('togetherDetail').textContent = 'На одной минуте';
+    } else {
+      $('togetherTitle').textContent = (delta > 0 ? (viewer?.name || 'Второй зритель') + ' немного впереди' : 'Вы немного впереди');
+      $('togetherDetail').textContent = 'Разница около ' + Math.round(Math.abs(delta)) + ' сек. Можно выровнять просмотр';
+    }
+    rate.hidden = !room.media_url;
+    const ratings = data.ratings || [], mine = ratings.find(r => r.client_id === id);
+    rate.querySelectorAll('button[data-score]').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.score) === mine?.rating)));
+    $('ratingSummary').textContent = ratings.length ? ratings.map(r => r.name + ': ' + r.rating + '/5').join(' · ') : 'Пока без оценок';
+    const list = $('libraryList'); list.replaceChildren();
+    const entries = [{media_url:room.media_url,ratings,watched_at:room.updated_at}, ...(data.history || [])].filter(e => e.media_url);
+    if (!entries.length) list.textContent = 'История пока пуста';
+    for (const entry of entries) {
+      const item = document.createElement('div'); item.className = 'library-entry';
+      const title = document.createElement('b'); title.textContent = label(entry.media_url);
+      const detail = document.createElement('span'); detail.textContent = (entry.ratings || []).length ? entry.ratings.map(r => r.name + ' ' + r.rating + '/5').join(' · ') : 'Без оценок';
+      item.append(title,detail); list.append(item);
+    }
+  }
+  window.addEventListener('message', event => {
+    if (event.origin !== 'https://rutube.ru' || !current || !rutube(current.room.media_url) || event.source !== document.querySelector('#screen iframe')?.contentWindow) return;
+    let message; try { message = typeof event.data === 'string' ? JSON.parse(event.data) : event.data; } catch { return; }
+    if (message.type === 'player:currentTime' && Number.isFinite(Number(message.data?.time))) { ownPosition = Number(message.data.time); rutubeAt = Date.now(); }
+  });
+  $('alignButton').onclick = () => {
+    if (!peer || !current || !supported(current.room.media_url)) return;
+    const target = peer.position + (peer.playing ? Math.max(0,(Date.now()-peer.at)/1000) : 0);
+    const video = document.querySelector('#screen video'), frame = document.querySelector('#screen iframe');
+    if (video) video.currentTime = target;
+    else if (frame && rutube(current.room.media_url)) { frame.contentWindow.postMessage(JSON.stringify({type:'player:setCurrentTime',data:{time:target}}),'https://rutube.ru'); ownPosition=target; rutubeAt=Date.now(); }
+    $('togetherDetail').textContent = 'Выровняли время просмотра';
+  };
+  $('waitButton').onclick = async () => {
+    const waiting = current?.room.waiting_for !== id, at = position();
+    try { await request('wait',{waiting,resume:!waiting,position:at ?? current?.room.position ?? 0}); await tick(); } catch(e) { $('togetherDetail').textContent=e.message; }
+  };
+  rate.querySelector('#ratingRow').onclick = async event => {
+    const score = Number(event.target.closest('button[data-score]')?.dataset.score);
+    if (!score) return;
+    try { await request('rate',{rating:score}); await tick(); } catch(e) { $('ratingSummary').textContent=e.message; }
+  };
+  async function tick() {
+    if (!name() || busy) return; busy = true;
+    try {
+      const at = position();
+      if (current?.room.media_url && supported(current.room.media_url) && Number.isFinite(at) && Date.now()-lastReport > 4500) {
+        await request('progress',{position:at,playing:Boolean(current.room.playing),mediaUrl:current.room.media_url});
+        lastReport=Date.now();
+      }
+      current = await request('poll'); render(current);
+    } catch {} finally { busy=false; }
+  }
+  setInterval(tick,2500); setTimeout(tick,700);
 })();
 </script>
 </body>
