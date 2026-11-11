@@ -38,7 +38,8 @@ export default async function handler(request) {
       if (pair?.users.some(u => u.name.toLowerCase() === data.name.trim().toLowerCase())) return reply({ error: 'Это имя уже занято' }, 409);
       if (!pair) {
         const setup = process.env.PAIR_SETUP_CODE || '';
-        if (setup.length < 16 || typeof data.code !== 'string' || !safeEqual(digest(data.code), digest(setup))) return reply({ error: 'Неверный код создания пары' }, 403);
+        if (setup.length < 16) return reply({ error: 'Владелец сайта ещё не настроил код пары' }, 503);
+        if (typeof data.code !== 'string' || !safeEqual(digest(data.code), digest(setup))) return reply({ error: 'Неверный код создания пары' }, 403);
       } else if (!pair.invite_hash || typeof data.code !== 'string' || !safeEqual(digest(data.code), pair.invite_hash)) return reply({ error: 'Неверный код приглашения' }, 403);
       const salt = hex(16), id = hex(16), sessionToken = hex(32), invite = pair ? '' : hex(12);
       const next = pair || { users: [], sessions: [], library: [], invite_hash: digest(invite) };
