@@ -59,8 +59,14 @@
   const key = 'kino-vdvoem-id';
   const nameKey = 'kino-vdvoem-name';
   const makeId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+  const lastRoomKey = 'kino-vdvoem-last-room';
   let roomId = location.pathname.match(/^\/r\/([a-f0-9]{32})\/?$/)?.[1];
-  if (!roomId) { roomId = makeId(); history.replaceState(null, '', '/r/' + roomId); }
+  if (!roomId) {
+    const savedRoom = localStorage.getItem(lastRoomKey);
+    roomId = /^[a-f0-9]{32}$/.test(savedRoom || '') ? savedRoom : makeId();
+    history.replaceState(null, '', '/r/' + roomId);
+  }
+  localStorage.setItem(lastRoomKey, roomId);
   $('roomCode').textContent = 'КОМНАТА · ' + roomId.slice(0, 6).toUpperCase();
   const ownerKey = 'kino-vdvoem-owner-' + roomId;
   let ownerToken = localStorage.getItem(ownerKey) || '';
@@ -414,8 +420,8 @@
     button.dataset.score = String(score); button.setAttribute('aria-label', 'Оценить фильм на ' + score + ' из 5');
     rate.querySelector('#ratingRow').append(button);
   }
-  const libraryButton = document.createElement('button'); libraryButton.className = 'library-toggle'; libraryButton.type = 'button'; libraryButton.textContent = 'История просмотров этой комнаты';
-  const library = document.createElement('section'); library.className = 'card library-card'; library.hidden = true; library.innerHTML = '<h3>Наша библиотека</h3><p>Фильмы и ваши оценки сохраняются в этой комнате.</p><div id="libraryList"></div>';
+  const libraryButton = document.createElement('button'); libraryButton.className = 'library-toggle'; libraryButton.type = 'button'; libraryButton.textContent = 'Библиотека и профили';
+  const library = document.createElement('section'); library.className = 'card library-card'; library.hidden = true; library.innerHTML = '<h3>Наша библиотека</h3><p>История этой комнаты хранится на сервере. Откройте ту же ссылку, чтобы вернуться. Оценки из всех комнат доступны в общей библиотеке профиля ниже.</p><div id="libraryList"></div>';
   rate.after(libraryButton, library);
   libraryButton.onclick = () => { library.hidden = !library.hidden; libraryButton.setAttribute('aria-expanded', String(!library.hidden)); };
   libraryButton.setAttribute('aria-expanded', 'false');
@@ -473,7 +479,7 @@
     $('ratingSummary').textContent = ratings.length ? ratings.map(r => r.name + ': ' + r.rating + '/5').join(' · ') : 'Пока без оценок';
     const list = $('libraryList'); list.replaceChildren();
     const entries = [{media_url:room.media_url,ratings,watched_at:room.updated_at}, ...(data.history || [])].filter(e => e.media_url);
-    if (!entries.length) list.textContent = 'История пока пуста';
+    if (!entries.length) list.textContent = 'В этой комнате пока нет просмотров. Общая библиотека профиля — ниже.';
     for (const entry of entries) {
       const item = document.createElement('div'); item.className = 'library-entry';
       const title = document.createElement('b'); title.textContent = label(entry.media_url);
