@@ -419,6 +419,10 @@
   rate.after(libraryButton, library);
   libraryButton.onclick = () => { library.hidden = !library.hidden; libraryButton.setAttribute('aria-expanded', String(!library.hidden)); };
   libraryButton.setAttribute('aria-expanded', 'false');
+  const avatar = document.getElementById('railAvatar');
+  avatar.setAttribute('role', 'button'); avatar.setAttribute('tabindex', '0'); avatar.setAttribute('aria-label', 'Открыть библиотеку комнаты');
+  avatar.onclick = () => { if (library.hidden) libraryButton.click(); library.scrollIntoView({behavior:'smooth',block:'start'}); };
+  avatar.onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); avatar.click(); } };
   const $ = id => document.getElementById(id);
   const id = localStorage.getItem('kino-vdvoem-id');
   const name = () => localStorage.getItem('kino-vdvoem-name');
