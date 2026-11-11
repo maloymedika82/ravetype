@@ -1,0 +1,23 @@
+[Unit]
+Description=Ravetype watch room
+After=network-online.target
+
+[Service]
+Type=simple
+User=ravetype
+Group=ravetype
+WorkingDirectory=/opt/ravetype/kino-vdvoem-netlify
+Environment=RAVETYPE_DATA_DIR=/var/lib/ravetype
+Environment=PORT=3907
+Environment=HOST=0.0.0.0
+EnvironmentFile=-/etc/ravetype.env
+ExecStart=/usr/bin/node vps/server.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ravetype
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
