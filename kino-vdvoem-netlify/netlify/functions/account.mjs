@@ -34,6 +34,7 @@ export default async function handler(request) {
     if (action === 'register') {
       if (!validName(data.name) || !validPassword(data.password)) return reply({ error: 'Имя до 24 символов, пароль от 8 символов' }, 400);
       if (pair?.users.length >= 2) return reply({ error: 'Оба профиля уже созданы' }, 403);
+      if (pair?.users.some(u => u.name.toLowerCase() === data.name.trim().toLowerCase())) return reply({ error: 'Это имя уже занято' }, 409);
       if (!pair) {
         const setup = process.env.PAIR_SETUP_CODE || '';
         if (setup.length < 16 || typeof data.code !== 'string' || !safeEqual(digest(data.code), digest(setup))) return reply({ error: 'Неверный код создания пары' }, 403);
