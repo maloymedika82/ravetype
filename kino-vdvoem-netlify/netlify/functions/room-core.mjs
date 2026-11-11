@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 const roomPattern = /^[a-f0-9]{32}$/;
 const actions = new Set(['poll', 'media', 'playback', 'message', 'voice', 'manage', 'ice', 'progress', 'wait', 'rate']);
 
@@ -92,7 +93,7 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
       const ownerAssigned = !state.owner_id;
       if (ownerAssigned) state.owner_id = clientId;
       const tokenAssigned = (ownerAssigned || (!state.owner_token && state.owner_id === clientId));
-      if (tokenAssigned) state.owner_token = crypto.randomUUID().replace(/-/g, '');
+      if (tokenAssigned) state.owner_token = randomUUID().replace(/-/g, '');
       const ownerToken = state.owner_id === clientId && state.owner_token === data.ownerToken || tokenAssigned && state.owner_id === clientId ? state.owner_token : '';
       if (state.kicked?.[clientId] > now) return json({ error: 'Владелец удалил вас из комнаты' }, 403);
       const participants = state.participants.filter(p => p.last_seen > now - 30000);
@@ -166,7 +167,7 @@ export async function handleRoomRequest(request, store, now = Date.now()) {
         state.ratings = state.ratings.filter(r => r.client_id !== clientId);
         state.ratings.push({ client_id: clientId, name: member?.custom_name || name, rating: data.rating, at: now });
       } else if (action === 'message') {
-        state.messages.push({ id: crypto.randomUUID(), client_id: clientId, name: member?.custom_name || name, body, created_at: now });
+        state.messages.push({ id: randomUUID(), client_id: clientId, name: member?.custom_name || name, body, created_at: now });
         state.messages = state.messages.slice(-80);
       } else if (action === 'manage') {
         if (data.target === state.owner_id) return json({ error: 'Нельзя изменить владельца' }, 400);
